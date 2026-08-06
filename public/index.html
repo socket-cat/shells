@@ -1,0 +1,171 @@
+<!--
+ @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ Licensed under AGPL-3.0. See LICENSE for details.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+<title>{{APP_NAME}}</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/fonts/fira-code/index.css">
+<link rel="stylesheet" href="/css/xterm.css">
+<link rel="stylesheet" href="/css/base.css?v={{VERSION}}">
+<link rel="stylesheet" href="/css/load-screen.css?v={{VERSION}}">
+<link rel="stylesheet" href="/css/shell-grid.css?v={{VERSION}}">
+<link rel="stylesheet" href="/css/components.css?v={{VERSION}}">
+<link rel="stylesheet" href="/css/mobile.css?v={{VERSION}}">
+<link rel="stylesheet" href="/css/tui-dialog.css?v={{VERSION}}">
+  <style>:root{--accent:{{ACCENT}};--accent-text:#0a0a0a}</style>
+  <script src="/js/theme-templates.js"></script>
+  <script>
+    // Anti-flash: apply the accent synchronously before first paint so the
+    // load screen never shows the default (#fab283) or a stale cached accent.
+    // Prefers the user's last chosen accent (localStorage), falls back to the
+    // server branding baked into this page. initBranding() applies the same
+    // value, so there is no visible change once JS runs.
+    (function () {
+      var c = '{{ACCENT}}';
+      try { var ls = localStorage.getItem('shells-accent'); if (/^#[0-9a-fA-F]{6}$/.test(ls || '')) c = ls; } catch (e) {}
+      var h = c.replace('#', '');
+      var ch = function (i) {
+        var v = parseInt(h.substring(i, i + 2), 16);
+        var n = Math.min(255, Math.round(v + (255 - v) * 0.12));
+        return ('0' + n.toString(16)).slice(-2);
+      };
+      var r = document.documentElement.style;
+      r.setProperty('--accent', c);
+      r.setProperty('--accent-hover', '#' + ch(0) + ch(2) + ch(4));
+      var lum = (parseInt(h.substring(0, 2), 16) / 255) * 0.2126 +
+                (parseInt(h.substring(2, 4), 16) / 255) * 0.7152 +
+                (parseInt(h.substring(4, 6), 16) / 255) * 0.0722;
+      r.setProperty('--accent-text', lum > 0.5 ? '#0a0a0a' : '#ffffff');
+    })();
+    // Anti-flash (theme): apply the theme's CSS filter before first paint so
+    // cold loads never flash from one theme to another (e.g. light/sepia over
+    // the dark base). Mirrors theme.js _applyTheme (template + tone) but
+    // consumes the shared SHELLS_THEME_TEMPLATES (theme-templates.js) so the
+    // template definitions can never drift between here and theme.js.
+    (function () {
+      var T = window.SHELLS_THEME_TEMPLATES || {};
+      var id = null;
+      try { id = localStorage.getItem('shells-theme'); } catch (e) {}
+      if (!id || !T[id]) {
+        id = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+      }
+      var t = T[id];
+      if (t && t.base) {
+        var read = function (k, d) { try { var v = parseFloat(localStorage.getItem(k)); return isNaN(v) ? d : v; } catch (e) { return d; } };
+        var clamp = function (v, lo, hi) { return Math.max(lo, Math.min(hi, v)); };
+        var h = clamp(read('shells-theme-hue', t.preset.hue), 0, 360);
+        var b = clamp(read('shells-theme-brightness', t.preset.brightness), 0.5, 1.5);
+        var c = clamp(read('shells-theme-contrast', t.preset.contrast), 0.5, 1.5);
+        var root = document.documentElement;
+        root.classList.add('invert');
+        root.style.setProperty('--theme-filter', t.base.replace('{hue}', h).replace('{bright}', b).replace('{contrast}', c));
+      }
+    })();
+    // Stuck-on-load escape hatch. Intentionally INLINE (not a ?v= external
+    // script) so it still runs when every SRI-gated resource is blocked —
+    // exactly the "dead splash" case it exists for. Reveals the "Force reload"
+    // link if the splash stays up ~12s; the click unregisters every service
+    // worker + wipes Cache Storage + hard-reloads, so a stale SW or a
+    // version-skewed cache can't re-serve the broken state.
+    (function () {
+      var seenAt = 0;
+      setInterval(function () {
+        var s = document.getElementById('load-screen');
+        if (!s || s.classList.contains('fade-out')) { seenAt = 0; return; }
+        if (!seenAt) seenAt = Date.now();
+        if (Date.now() - seenAt > 12000) {
+          var links = document.querySelectorAll('#load-force-reload');
+          for (var i = 0; i < links.length; i++) links[i].classList.remove('hidden');
+        }
+      }, 2000);
+
+      document.addEventListener('click', function (e) {
+        var link = e.target && e.target.closest ? e.target.closest('#load-force-reload') : null;
+        if (!link || link.dataset.busy) return;
+        e.preventDefault();
+        link.dataset.busy = '1';
+        link.textContent = 'Reloading…';
+        link.style.opacity = '0.5';
+        link.style.pointerEvents = 'none';
+        (async function () {
+          try {
+            if ('serviceWorker' in navigator) {
+              var regs = await navigator.serviceWorker.getRegistrations();
+              await Promise.all(regs.map(function (r) { return r.unregister(); }));
+            }
+          } catch (_) {}
+          try {
+            var keys = await caches.keys();
+            await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+          } catch (_) {}
+          window.location.reload();
+          setTimeout(function () {
+            window.location.href = window.location.pathname + '?_=' + Date.now();
+          }, 800);
+        })();
+      });
+    })();
+  </script>
+<meta name="theme-color" content="#0a0a0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+<meta name="author" content="Carles Ortega Ragull (ragull)">
+<meta name="socket-cat-app" content="socat">
+<meta name="description" content="Secure, E2EE-encrypted web interface for multiple shell sessions with a responsive TUI-inspired layout and mobile support">
+</head>
+<body autocomplete="off" autocapitalize="off" autocorrect="off" data-hostname="{{HOSTNAME}}" data-version="{{VERSION}}" data-accent="{{ACCENT}}" data-app-name="{{APP_NAME}}">
+  <div id="load-screen">
+    <div class="load-splash">
+      <img class="load-icon" src="/icon.svg" alt="" width="128" height="128">
+      <div class="load-app-name">{{APP_NAME}}</div>
+      <div class="load-bar"><div class="load-bar-fill" id="load-bar-fill"></div></div>
+      <div id="load-status">connecting</div>
+      <a id="load-force-reload" class="hidden" href="#" role="button">Stuck? Force reload</a>
+      <div class="load-sig">Shells v{{VERSION}} · <a href="https://socket.cat" target="_blank" rel="noopener">socket.cat</a></div>
+    </div>
+  </div>
+  <div id="app">
+  <div id="main-content">
+    <main id="shell-grid">
+    </main>
+  </div>
+  <div id="cmd-bar">
+    <span class="cmd-prompt">█</span>
+    <textarea id="cmd-input" rows="1" placeholder="Send text to active shell..." autocomplete="off" autocapitalize="none" autocorrect="on" spellcheck="true"></textarea>
+    <button type="button" class="cmd-arrow" id="cmd-up" title="Send up arrow" aria-label="Up arrow">↑</button>
+    <button type="button" class="cmd-arrow" id="cmd-down" title="Send down arrow" aria-label="Down arrow">↓</button>
+  </div>
+</div>
+<script src="/js/xterm.js"></script>
+<script src="/js/xterm-addon-fit.js"></script>
+<script src="/js/xterm-addon-webgl.js"></script>
+<script src="/js/xterm-addon-unicode11.js"></script>
+<script src="/js/xterm-addon-clipboard.js"></script>
+<script src="/js/xterm-addon-web-links.js"></script>
+<script src="/js/xterm-addon-search.js"></script>
+<script src="/pwa.js?v={{VERSION}}"></script>
+<script src="/js/icons.js?v={{VERSION}}"></script>
+<script src="/js/audio.js?v={{VERSION}}"></script>
+<script src="/js/tui-dialog.js?v={{VERSION}}"></script>
+<script src="/js/crypto.js?v={{VERSION}}"></script>
+<script src="/js/shell-sessions.js?v={{VERSION}}"></script>
+<script src="/js/layout.js?v={{VERSION}}"></script>
+<script src="/js/grid-resizer.js?v={{VERSION}}"></script>
+<script src="/js/switcher.js?v={{VERSION}}"></script>
+<script src="/js/mobile.js?v={{VERSION}}"></script>
+<script src="/js/telemetry.js?v={{VERSION}}"></script>
+<script src="/js/theme.js?v={{VERSION}}"></script>
+<script src="/js/input.js?v={{VERSION}}"></script>
+<script src="/js/keyboard-picker.js?v={{VERSION}}"></script>
+<script src="/js/app.js?v={{VERSION}}"></script>
+
+</body>
+</html>

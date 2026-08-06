@@ -1,0 +1,640 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* ── Main content layout ── */
+#main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+#main-content,
+#shell-grid,
+.shell-tile,
+.tile-body {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ── Shell grid ── */
+#shell-grid {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  padding: 0px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.shell-tile {
+  order: 2; /* All tiles default to stack */
+}
+
+/* Master-Stack (Auto) — implicit rows like grid/columns layouts */
+#shell-grid[data-layout-mode="auto"] {
+  grid-auto-rows: 1fr;
+}
+#shell-grid[data-layout-mode="auto"][data-count="1"] { grid-template-columns: 1fr; }
+#shell-grid[data-layout-mode="auto"][data-count="2"] { grid-template-columns: 1fr 1fr; }
+#shell-grid[data-layout-mode="auto"][data-count="2"] .shell-tile.is-master { order: 1; }
+
+#shell-grid[data-layout-mode="auto"][data-count="3"] { 
+  grid-template-columns: 1fr 1fr; 
+}
+#shell-grid[data-layout-mode="auto"][data-count="3"] .shell-tile.is-master { 
+  order: 1; 
+  grid-row: span 2;
+}
+
+#shell-grid[data-layout-mode="auto"][data-count="4"] { 
+  grid-template-columns: 2fr 1fr; 
+}
+#shell-grid[data-layout-mode="auto"][data-count="4"] .shell-tile.is-master { 
+  order: 1; 
+  grid-row: span 3;
+}
+
+#shell-grid[data-layout-mode="auto"]:not([data-count="1"]):not([data-count="2"]):not([data-count="3"]):not([data-count="4"]) {
+  grid-template-columns: 2fr repeat(var(--stack-cols, 2), 1fr);
+}
+#shell-grid[data-layout-mode="auto"]:not([data-count="1"]):not([data-count="2"]):not([data-count="3"]):not([data-count="4"]) .shell-tile.is-master {
+  order: 1;
+  grid-row: span var(--master-span, 2);
+}
+
+/* Columns */
+#shell-grid[data-layout-mode="columns"] {
+  grid-template-columns: repeat(var(--col-count, 1), 1fr);
+  grid-template-rows: 1fr;
+}
+
+/* Rows */
+#shell-grid[data-layout-mode="rows"] {
+  grid-template-columns: 1fr;
+  grid-auto-rows: 1fr;
+}
+
+/* Grid */
+#shell-grid[data-layout-mode="grid"] {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-auto-rows: 1fr;
+}
+#shell-grid[data-layout-mode="grid"][data-count="3"], 
+#shell-grid[data-layout-mode="grid"][data-count="4"] { 
+  grid-template-columns: 1fr 1fr; 
+}
+#shell-grid[data-layout-mode="grid"][data-count="5"],
+#shell-grid[data-layout-mode="grid"][data-count="6"] { 
+  grid-template-columns: 1fr 1fr 1fr; 
+}
+
+#empty-state {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  animation: empty-fade-in 0.3s ease;
+}
+
+@keyframes empty-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+#empty-state .empty-icon {
+  width: 128px;
+  height: 128px;
+  border-radius: 28px;
+  margin-bottom: 4px;
+}
+
+#empty-state .empty-app-name {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  letter-spacing: 0.5px;
+}
+
+.empty-new-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: 0;
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: bold;
+  padding: 2px 16px;
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: opacity 0.15s;
+  margin-top: 4px;
+}
+
+.empty-new-btn:hover { opacity: 0.85; }
+
+.empty-lock-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  margin-top: 8px;
+}
+
+.empty-appearance-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  margin-top: 8px;
+  text-transform: none;
+  transition: color 0.15s, opacity 0.15s;
+}
+
+.empty-appearance-btn:hover {
+  color: var(--text);
+  opacity: 0.9;
+}
+
+#empty-state .empty-sig {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  margin-top: 4px;
+}
+
+#empty-state .empty-sig a {
+  color: inherit;
+  text-decoration: none;
+}
+
+#empty-state .empty-sig a:hover {
+  text-decoration: underline;
+}
+
+#empty-state .empty-shortcut {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+#empty-state p { margin-bottom: 6px; margin-top: 12px; }
+
+/* ── Project Badge ── */
+.project-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 3px;
+  border-radius: 0;
+  margin-right: 2px;
+  color: #000;
+  text-transform: uppercase;
+  line-height: 1;
+  min-width: 16px;
+  flex-shrink: 0;
+}
+
+/* ── Shell tile ── */
+.shell-tile {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color 0.15s;
+  position: relative;
+}
+
+.shell-tile:hover { border-color: var(--border); }
+.shell-tile.active {
+  border-color: var(--accent);
+  box-shadow: none;
+}
+#shell-grid[data-count="1"] .shell-tile.active {
+  border-color: var(--border-subtle);
+}
+.shell-tile.fullscreen {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  z-index: 1000;
+  border-radius: 0;
+  border-color: var(--border-subtle);
+}
+
+.shell-tile.fullscreen [data-action="toggle-fullscreen"] {
+  color: var(--accent);
+}
+
+.tile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px;
+  height: 24px;
+  min-height: 24px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  user-select: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.shell-tile.fullscreen .tile-header {
+  z-index: 1001;
+  height: auto;
+  min-height: 24px;
+  flex-wrap: wrap;
+  padding: 0;
+  gap: 0;
+}
+
+/* ── Fullscreen tab bar ── */
+.fs-tab-bar {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 0;
+  padding: 0;
+  height: 24px;
+}
+
+.fs-tab-bar::-webkit-scrollbar { display: none; }
+
+.fs-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  height: 24px;
+  min-height: 24px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 180px;
+  min-width: 0;
+  flex-shrink: 0;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.fs-tab:hover {
+  background: var(--bg-surface);
+}
+
+.fs-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: var(--bg-raised);
+}
+
+.fs-tab .fs-tab-badge {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 0px 2px;
+  border-radius: 0;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.fs-tab .fs-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fullscreen header: hide normal title/badge, show tab bar instead */
+.shell-tile.fullscreen .tile-header > .project-badge,
+.shell-tile.fullscreen .tile-header > .tile-bell-icon,
+.shell-tile.fullscreen .tile-header > .tile-title {
+  display: none;
+}
+
+.shell-tile.fullscreen .tile-header .tile-actions {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0 4px;
+  height: 24px;
+}
+
+/* When only 1 session, no tab bar needed — show normal header */
+.shell-tile.fullscreen .fs-tab-bar:empty {
+  display: none;
+}
+
+.tile-header .tile-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-header .tile-actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.tile-logo {
+  margin-right: 0;
+}
+
+.tile-logo svg {
+  display: block;
+}
+
+.shell-tile:not(.active) .tile-actions {
+  display: none;
+}
+
+.tile-header .tile-actions button {
+  border: none;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+}
+
+.tile-header .tile-actions button:hover {
+  color: var(--text);
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.shell-tile.is-master [data-action="promote-master"] {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.fs-a {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  font-weight: var(--weight-bold);
+}
+
+.fs-a--lg {
+  font-size: 15px;
+}
+
+.tile-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  background-color: #0a0a0a;
+}
+
+/* ── Terminal (xterm) baseline ── */
+.xterm {
+  font-variant-ligatures: none;
+  letter-spacing: normal !important;
+}
+
+.tile-body .xterm {
+  position: absolute;
+  top: 0; left: 0;
+  right: 0; bottom: 0;
+  touch-action: manipulation;
+}
+
+.tile-body .xterm,
+.tile-body .xterm * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.tile-body .xterm .xterm-accessibility-tree {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Fix for gap between xterm screen and scrollbar */
+.xterm .xterm-helpers {
+  width: 100% !important;
+  height: 0;
+  overflow: visible;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+}
+
+/* Reclaim unused space by forcing viewport to match screen width */
+.tile-body .xterm .xterm-viewport {
+  overflow: hidden !important;
+  background-color: transparent !important;
+}
+
+.tile-body .xterm .xterm-screen {
+  overflow: hidden;
+}
+
+/* ── PTY CSS Scaling (multi-device) ── */
+.pty-scale-interceptor {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  cursor: text;
+  background: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.tile-body.pty-scaled {
+  overflow: visible;
+}
+
+.tile-body.pty-scaled .mobile-gesture-layer {
+  z-index: 30;
+}
+
+/* ── Attention indicator (latched until the shell is activated) ── */
+.tile-bell-icon {
+  color: var(--accent);
+  display: none;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 4px;
+  line-height: 0;
+}
+.tile--bell .tile-bell-icon { display: inline-flex; }
+
+/* ── Terminal Bell Flash ── */
+.shell-tile.bell-flash {
+  border-color: var(--accent) !important;
+  transition: border-color 0.1s ease-out;
+}
+
+.shell-tile.bell-flash .tile-header {
+  background-color: rgba(250, 178, 131, 0.3) !important;
+  transition: background-color 0.1s ease-out;
+}
+
+/* ── Busy Badge Pulse (shell is producing output) ── */
+@keyframes shells-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.shell-tile.tile--busy .project-badge,
+.switcher-card.switcher-card--busy .project-badge {
+  animation: shells-badge-pulse 1.4s ease-in-out infinite;
+}
+
+/* ── TUI Status Bar ── */
+.term-search-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  box-sizing: border-box;
+}
+
+.term-search-bar input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  box-sizing: border-box;
+}
+
+.term-search-bar input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.term-search-bar button {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.term-search-bar button:hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+.term-search-bar .tsb-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.term-search-bar .tsb-count {
+  color: var(--text-muted);
+  font-size: 10px;
+  min-width: 44px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.term-search-bar .tsb-close {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.tui-status-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 32px; /* Slightly taller for easier clicking on mobile */
+  line-height: 32px;
+  background: #000;
+  color: #fff;
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  padding: 0 12px;
+  z-index: 2000; /* Higher than cmd-bar (1000) and other UI elements */
+  display: flex;
+  align-items: center;
+  pointer-events: auto;
+  cursor: pointer;
+  border-top: 1px solid var(--border-subtle);
+  animation: tui-slide-up 0.2s ease-out;
+  transition: filter 0.1s ease-in-out;
+}
+
+.tui-status-bar:hover {
+  filter: brightness(1.2);
+}
+
+.tui-status-bar.error {
+  background: #800;
+  color: #fff;
+}
+
+.tui-status-bar.info {
+  background: #005f87;
+  color: #fff;
+}
+
+@keyframes tui-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}

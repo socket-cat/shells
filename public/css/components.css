@@ -1,0 +1,238 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* ── Command Bar ── */
+#cmd-bar {
+  display: none;
+  align-items: flex-end;
+  padding: 2px 6px;
+  background: var(--bg-menu);
+  border-top: 1px solid var(--border-focus);
+  flex-shrink: 0;
+  min-height: var(--cmdbar-h);
+  position: relative;
+  z-index: 1000;
+}
+
+.cmd-prompt {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-right: 4px;
+  font-weight: var(--weight-bold);
+  user-select: none;
+  padding-bottom: 1px;
+}
+
+#cmd-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 0;
+  resize: none;
+  overflow-y: auto;
+  min-height: 14px;
+  line-height: 14px;
+  max-height: 80px;
+  box-sizing: content-box;
+  padding-bottom: 1px;
+}
+
+#cmd-input:focus {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+
+.cmd-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: background 0.1s, color 0.1s;
+}
+
+.cmd-arrow:hover {
+  background: rgba(250, 178, 131, 0.12);
+}
+
+.cmd-arrow:active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* ── PWA & Header Collapse ── */
+
+/* Opt-out checkbox row inside prompt dialogs */
+.tui-dialog-footer-extra {
+  padding: 0 32px;
+  margin-top: 10px;
+}
+
+.tui-dialog-footer-extra-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tui-dialog-footer-extra-check input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+/* Manual check button in the switcher footer */
+.switcher-update-check {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.switcher-update-check:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Install Button */
+.install-btn {
+  font-size: 12px !important;
+  padding: 1px 4px !important;
+  color: var(--accent) !important;
+  transition: color 0.15s, background 0.15s;
+  display: none;
+}
+
+body.pwa-installable .install-btn {
+  display: inline-block;
+}
+
+.install-btn:hover {
+  color: var(--accent-hover) !important;
+  background: rgba(250, 178, 131, 0.12) !important;
+  border-radius: 2px;
+}
+
+#keyboard-overlay {
+  padding: 0 !important;
+  align-items: flex-start !important;
+}
+
+#keyboard-overlay .tui-dialog {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  border: none !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+
+.keyboard-mod-row {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.keyboard-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.key-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 2px 1px;
+  background: rgba(250, 178, 131, 0.05);
+  border: none !important;
+  border-radius: 0 !important;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.key-btn:active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.key-modifier {
+  flex: 1;
+  font-weight: var(--weight-bold);
+  background: rgba(250, 178, 131, 0.1);
+}
+
+.key-modifier-active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.keyboard-combo-section {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 4px;
+}
+
+.keyboard-combo-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 3px;
+}
+
+.keyboard-combo-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px;
+}
+
+.key-combo-btn {
+  font-size: 9px;
+  min-height: 28px;
+  padding: 2px 0;
+}

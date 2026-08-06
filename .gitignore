@@ -1,0 +1,26 @@
+# Binaries
+/shells
+/shells-*
+*.exe
+
+# Key directory
+.key-dir/
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build / test artifacts
+/tmp/
+/dist/
+
+# Local development (not for public repo)
+/devel/
+/AGENTS.md

@@ -1,0 +1,155 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* ── Fonts ── */
+/* Fira Code is self-hosted via @fontsource/fira-code and copied to /fonts/ during postinstall */
+
+/* ── Base Reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0a0a0a;
+  --bg-raised: #141414;
+  --bg-surface: #1e1e1e;
+  --bg-menu: #282828;
+  --border-subtle: #3c3c3c;
+  --border: #484848;
+  --border-focus: #606060;
+  --text: #eeeeee;
+  --text-muted: #808080;
+  --accent: #fab283;
+  --accent-hover: #ffc09f;
+  --accent-text: #0a0a0a;
+  --secondary: #5c9cf5;
+  --danger: #e06c75;
+  --success: #7fd88f;
+  --warning: #e5c07b;
+  --font-mono: 'Fira Code', monospace;
+  --font-ui: 'Fira Code', monospace;
+  --weight-normal: 400;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --cmdbar-h: 0px;
+  --radius: 6px;
+}
+@media (min-width: 769px) {
+  html[data-theme-type="light"] {
+    --weight-normal: 300;
+    --weight-semibold: 400;
+    --weight-bold: 500;
+  }
+  html, body {
+    font-synthesis: none !important;
+  }
+}
+
+html, body {
+  height: 100%;
+...
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: var(--weight-normal);
+  overflow: hidden;
+  letter-spacing: 0.02em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+  padding-bottom: env(safe-area-inset-bottom);
+  position: relative;
+  overflow: hidden;
+}
+
+button {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  -webkit-app-region: no-drag;
+}
+
+button:hover {
+  background: var(--border);
+  border-color: var(--border-focus);
+}
+
+button:active {
+  background: var(--border-focus);
+  border-color: var(--border);
+  transform: translateY(1px);
+}
+
+/* ── Utilities ── */
+.hidden { display: none !important; }
+.flex { display: flex !important; }
+.items-start { align-items: flex-start !important; }
+.flex-grow { flex-grow: 1 !important; }
+.flex-shrink-0 { flex-shrink: 0 !important; }
+.gap-2 { gap: 8px !important; }
+.opacity-50 { opacity: 0.5 !important; }
+.opacity-60 { opacity: 0.6 !important; }
+.w-4 { width: 16px !important; }
+
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: var(--bg-surface); }
+*::-webkit-scrollbar-thumb { background: var(--border); border-radius: 0; }
+*::-webkit-scrollbar-thumb:hover { background: var(--border-focus); }
+*::-webkit-scrollbar-button { display: none !important; height: 0; width: 0; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+* { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg-surface); }
+
+textarea, input[type="text"] {
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+textarea:focus, input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+html.invert {
+  filter: var(--theme-filter, invert(1) hue-rotate(180deg) brightness(0.9) sepia(0.12));
+}

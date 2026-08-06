@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Shells — socket.cat. Author: Carles Ortega Ragull <ragull@socket.cat>
+//
+// Wire-protocol v3: P-256 ECDH + HKDF-SHA256 + AES-256-GCM + HMAC-SHA256.
+// Pure Go standard library; no third-party modules.
+
+// Package main is the shells server entrypoint.
+package main
+
+import (
+	"context"
+	"embed"
+	"fmt"
+	"io/fs"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"runtime/debug"
+	"strings"
+	"syscall"
+	"time"
+
+	"shells/internal/api"
+	"shells/internal/auth"
+	"shells/internal/binpath"
+	"shells/internal/branding"
+	"shells/internal/config"
+	"shells/internal/crypto"
+	"shells/internal/release"
+	"shells/internal/selfupdate"
+	"shells/internal/session"
+	"shells/internal/ssh"
+	"shells/internal/static"
+	"shells/internal/wshandler"
+)
+
+//go:embed public
+var embedPublic embed.FS
+
+//go:embed VERSION
+var embedVersion []byte
+
+func main() {
+	// Self-update by default: the binary runs a child copy of itself so it can
+	// apply its own verified updates (preflight, swap, rollback).
+	if selfupdate.Enabled() {
+		selfupdate.Run() // the parent owns the process from here on
+		os.Exit(0)       // safety net: never fall through to the server code
+	}
+
+	version := strings.TrimSpace(string(embedVersion))
+
+	cfg, err := config.Load(version)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
+	if err := release.Init(); err != nil {
+		log.Fatalf("release: %v", err)
+	}
+
+	mgr, err := session.New(cfg)
+	if err != nil {
+		log.Fatalf("session manager: %v", err)
+	}
+
+	authStore := auth.NewStore(cfg.AppToken)
+
+	// Periodic token cleanup.
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		for range t.C {
+			authStore.Cleanup()
+		}
+	}()
+
+	// Initialise binary cache for /api/which tab-completion.
+	binpath.Init()
+
+	// Initialise SSH manager and wire into session manager.
+	sshMgr := ssh.NewManager(cfg)
+	if cfg.SSHAvailable {
+		mgr.SpawnSSH = ssh.Spawn(cfg)
+	}
+
+	wsH := wshandler.New(cfg, mgr, authStore)
+	wsH.RegisterSessionEvents()
+
+	subFS, err := fs.Sub(embedPublic, "public")
+	if err != nil {
+		log.Fatalf("embed sub: %v", err)
+	}
+
+	brand := branding.Load(cfg.BrandingFile, cfg.AppName, cfg.Accent)
+
+	staticH, err := static.New(subFS, version, cfg.ServerKeyDir, cfg.Accent, cfg.AppName, brand)
+	if err != nil {
+		log.Fatalf("static: %v", err)
+	}
+
+	apiH := api.New(cfg, mgr, authStore, sshMgr, brand)
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws", wsH)
+	mux.HandleFunc("/api/", apiH.ServeHTTP)
+	mux.Handle("/", staticH)
+
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	log.Printf("Shells v%s listening on %s (token: %s...)", version, addr, cfg.AppToken[:8])
+	log.Printf("State dir: %s", cfg.ServerKeyDir)
+	switch cfg.SecretSource {
+	case "generated":
+		log.Printf("E2E secret: %s (generated, saved to %s)", cfg.Secret, cfg.SecretFile)
+	case "file":
+		log.Printf("E2E secret: (loaded from %s)", cfg.SecretFile)
+	case "env":
+		log.Printf("E2E secret: (from $SECRET env)")
+	default:
+		log.Printf("E2E secret: (from %s)", cfg.SecretSource)
+	}
+
+	cors := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if origin := r.Header.Get("Origin"); origin != "" {
+				h := w.Header()
+				h.Set("Access-Control-Allow-Origin", origin)
+				h.Add("Vary", "Origin")
+				h.Set("Access-Control-Allow-Credentials", "true")
+			}
+			// Short-circuit CORS preflight: must NOT require auth.
+			if r.Method == http.MethodOptions {
+				h := w.Header()
+				h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+				h.Set("Access-Control-Allow-Headers", "Content-Type, X-Shells-Encrypted, X-Shells-Token")
+				h.Set("Access-Control-Max-Age", "86400")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	securityHeaders := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Referrer-Policy", "no-referrer")
+			// HSTS is owned by the TLS-terminating reverse proxy (e.g. nginx) to avoid duplicate headers.
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	recovery := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("panic recovered: %v\n%s", rec, debug.Stack())
+					// 200 with error body: nginx can't intercept a 200.
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"error":"Internal error (recovered)"}`))
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           securityHeaders(cors(recovery(mux))),
+		ReadHeaderTimeout: 10 * time.Second, // headers only; does not cap long-lived WS
+		IdleTimeout:       120 * time.Second,
+	}
+
+	// Graceful shutdown.
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Shutting down...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		mgr.DestroyAll()
+		crypto.Shutdown()
+	}()
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("server: %v", err)
+	}
+}

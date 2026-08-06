@@ -1,0 +1,515 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+.tui-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: tui-overlay-in 0.15s ease-out;
+  z-index: 10000;
+}
+
+.tui-overlay--absolute {
+  position: absolute;
+  z-index: 100;
+}
+
+.tui-overlay--transparent {
+  background: transparent !important;
+}
+
+.tui-overlay--top {
+  align-items: flex-start !important;
+  padding-top: 6px !important;
+}
+
+@keyframes tui-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.tui-dialog {
+  background: var(--bg-raised);
+  border: none;
+  border-radius: 0;
+  width: 100%;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 16px;
+  box-sizing: border-box;
+  box-shadow: 
+    0 0 0 1px rgba(0, 0, 0, 0.1),
+    0 10px 30px rgba(0, 0, 0, 0.3),
+    0 4px 8px rgba(0, 0, 0, 0.2);
+  animation: tui-dialog-in 0.15s ease-out;
+}
+
+@keyframes tui-dialog-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tui-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.tui-dialog--small {
+  width: 280px;
+}
+
+.tui-dialog--medium {
+  width: 400px;
+}
+
+.tui-dialog--large {
+  width: 600px;
+}
+
+.tui-dialog--narrow {
+  width: min(320px, calc(100vw - 24px));
+}
+
+.tui-dialog-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 32px 6px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 4px;
+}
+
+.tui-dialog-brand-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+
+.tui-dialog-brand-logo {
+  width: 20px;
+  height: 20px;
+  opacity: 0.85;
+  margin-right: 0;
+}
+
+.tui-dialog-brand-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  text-decoration: none;
+  opacity: 0.5;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.tui-dialog-brand-right:hover {
+  opacity: 0.8;
+}
+
+.tui-dialog-brand-right a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.tui-dialog-brand-right a:hover {
+  text-decoration: underline;
+}
+
+.tui-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 32px 8px;
+  margin-bottom: 0;
+}
+
+.tui-dialog-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  margin-right: 12px;
+}
+
+.tui-dialog-close {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+
+.tui-dialog-close:hover {
+  color: var(--text);
+}
+
+.tui-dialog-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tui-dialog-desc {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 0 32px 12px;
+}
+
+.tui-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 32px 0;
+}
+
+.tui-dialog-choice {
+  background: transparent;
+  border: none;
+  border-radius: 0 !important;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.tui-dialog-choice[data-active='true'] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.tui-dialog-choice--dangerous[data-active='true'] {
+  background: var(--danger);
+  color: var(--bg);
+}
+
+.tui-dialog-grid {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 480px) {
+  .tui-dialog-grid {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+.tui-dialog-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0 !important;
+  color: var(--text);
+  cursor: pointer;
+  padding: 2px 32px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+
+.tui-dialog-card:hover,
+.tui-dialog-card:focus-visible {
+  outline: none;
+}
+
+.tui-dialog-card[data-active='true'] {
+  background: var(--accent);
+  color: var(--accent-text);
+  outline: none;
+}
+
+.tui-dialog-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.tui-dialog-card-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tui-dialog-card-desc {
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tui-dialog-hints {
+  display: flex;
+  gap: 12px;
+  padding: 8px 32px 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.tui-dialog-hint {
+  color: var(--text);
+}
+
+.tui-dialog-hint span {
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.tui-dialog-card-category {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: bold;
+  padding: 12px 32px 4px;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+.tui-dialog-card-footer {
+  font-size: 9px;
+  color: inherit;
+  opacity: 0.6;
+}
+
+.tui-dialog-body form {
+  display: contents;
+  margin: 0;
+  padding: 0;
+}
+
+.tui-dialog-input {
+  width: auto !important;
+  background: var(--bg-surface);
+  border: none !important;
+  border-bottom: 2px solid var(--border) !important;
+  border-radius: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  margin: 0 32px 12px !important;
+  flex-shrink: 0;
+  transition: background 0.1s, border-bottom-color 0.1s;
+}
+
+.tui-dialog-input:focus {
+  outline: none;
+  background: var(--bg-menu);
+  border-bottom-color: var(--accent) !important;
+}
+
+.tui-dialog-suggestions {
+  display: none;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  margin: -12px 32px 12px;
+  min-height: 150px;
+  max-height: 150px;
+  overflow-y: auto;
+  z-index: 10;
+}
+
+.tui-dialog-suggestions.visible {
+  display: flex;
+}
+
+.tui-dialog-suggestion-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.tui-dialog-suggestion-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-dialog-suggestion-delete {
+  opacity: 0;
+  margin-left: 8px;
+  font-size: 14px;
+  padding: 0 4px;
+  transition: opacity 0.1s, color 0.1s;
+}
+
+.tui-dialog-suggestion-delete--hidden {
+  visibility: hidden;
+}
+
+.tui-dialog-suggestion-desc {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.tui-dialog-suggestion-item:hover .tui-dialog-suggestion-delete,
+.tui-dialog-suggestion-item.active .tui-dialog-suggestion-delete {
+  opacity: 0.6;
+}
+
+.tui-dialog-suggestion-delete:hover {
+  opacity: 1 !important;
+  color: var(--danger);
+}
+
+.tui-dialog-suggestion-item:hover,
+.tui-dialog-suggestion-item.active {
+  background: var(--bg-menu);
+  color: var(--accent);
+}
+
+.tui-dialog-suggestion-item:hover .tui-dialog-suggestion-desc,
+.tui-dialog-suggestion-item.active .tui-dialog-suggestion-desc {
+  opacity: 1;
+}
+
+.tui-toast {
+  position: fixed;
+  top: 32px;
+  right: 32px;
+  z-index: 10002;
+  padding: 10px 16px;
+  background: var(--bg-raised);
+  border: none;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  max-width: min(400px, calc(100vw - 48px));
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  transform: translateX(20px);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+.tui-toast--visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.tui-toast-title {
+  font-weight: bold;
+}
+
+.tui-toast--success {
+  background: var(--success);
+  color: var(--bg);
+}
+.tui-toast--success .tui-toast-title { color: var(--bg); }
+
+.tui-toast--error {
+  background: var(--danger);
+  color: #ffffff;
+}
+.tui-toast--error .tui-toast-title { color: #ffffff; }
+
+.tui-toast--info {
+  background: var(--secondary);
+  color: #ffffff;
+}
+.tui-toast--info .tui-toast-title { color: #ffffff; }
+
+.tui-toast--warning {
+  background: var(--warning);
+  color: var(--bg);
+}
+.tui-toast--warning .tui-toast-title { color: var(--bg); }
+
+@media (max-width: 480px) {
+  .tui-dialog {
+    width: 100vw !important;
+    max-height: 100vh;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+}
+
+.tui-dialog-suggestion-loading {
+  opacity: 0.5;
+  font-style: italic;
+  pointer-events: none;
+}
+
+.tui-dialog-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

@@ -1,0 +1,32 @@
+{
+  "name": {{APP_NAME_JSON}},
+  "short_name": {{APP_NAME_JSON}},
+  "description": "Secure, E2EE-encrypted web interface for multiple shell sessions with a responsive TUI-inspired layout",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "version": "1.0.0"
+}

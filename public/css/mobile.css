@@ -1,0 +1,416 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* ── Mobile Viewport and Gestures ── */
+
+@media (max-width: 768px) {
+  :root {
+    --cmdbar-h: 22px;
+  }
+
+  .fs-tab-bar {
+    display: none !important;
+  }
+
+  .shell-tile.fullscreen .tile-header > .project-badge,
+  .shell-tile.fullscreen .tile-header > .tile-title {
+    display: revert;
+  }
+
+  #app {
+    padding-bottom: 0;
+  }
+
+  #cmd-bar {
+    display: flex;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  #shell-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .tile-header {
+    height: 20px;
+    min-height: 20px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  .tile-header .tile-actions button {
+    font-size: 12px;
+    padding: 0 4px;
+    min-width: 20px;
+    min-height: 20px;
+  }
+}
+
+.mobile-gesture-layer {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .tile-body .mobile-gesture-layer {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    touch-action: none;
+    background: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  .tile-body .mobile-gesture-layer.selection-mode {
+    pointer-events: none;
+  }
+
+  .tile-body .xterm .xterm-accessibility {
+    display: none !important;
+  }
+}
+
+/* ── Shell Switcher (Android-like recent apps) ── */
+
+/* ── Mobile gesture hints (TUI dialog rows) ── */
+.gh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.gh-gesture {
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+  min-width: 26px;
+  text-align: center;
+}
+
+.gh-act {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.gh-res {
+  color: var(--text-muted);
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+}
+
+#shell-switcher {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  background: var(--bg);
+  z-index: 3000;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 16px;
+  padding: 40px 0;
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+  pointer-events: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+#shell-switcher.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.switcher-brand {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 0 20px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.switcher-brand-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.switcher-logo svg {
+  display: block;
+}
+
+.switcher-app-name {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.switcher-credits {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.switcher-credits a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.switcher-credits a:hover {
+  text-decoration: underline;
+}
+
+.switcher-footer {
+  margin-top: auto;
+  padding: 2px 20px 12px;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.9;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.switcher-cards {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 20px 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100vw;
+  scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (min-width: 769px) {
+  .switcher-cards {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 24px;
+    padding: 24px 40px;
+    max-width: 1200px;
+    width: 90vw;
+    scroll-snap-type: none;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .switcher-card {
+    width: 100%;
+    max-width: 400px;
+    scroll-snap-align: none;
+  }
+}
+
+.switcher-cards::-webkit-scrollbar {
+  width: 3px;
+  height: 0;
+}
+
+.switcher-cards::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 0;
+}
+
+.switcher-card {
+  flex-shrink: 0;
+  width: 85vw;
+  max-width: 340px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  overflow: hidden;
+  scroll-snap-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+  animation: switcher-card-in 0.2s ease-out both;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.switcher-card.active-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 4px 20px rgba(0,0,0,0.4);
+}
+
+.switcher-card:hover {
+  border-color: var(--border);
+  transform: translateY(-2px);
+}
+
+.switcher-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.switcher-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.switcher-card-bell {
+  color: var(--accent);
+  display: none;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 4px;
+  line-height: 0;
+}
+.switcher-card--bell .switcher-card-bell { display: inline-flex; }
+
+.switcher-card-close {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  padding: 0 4px;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.switcher-card-close:hover {
+  color: var(--danger);
+}
+.switcher-card-preview {
+  height: 160px;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg-surface, #0a0a0a);
+  padding: 8px 10px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  -webkit-mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+}
+
+.switcher-preview-text {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.15;
+  margin: 0;
+  white-space: pre;
+  overflow: hidden;
+  color: #eeeeee;
+  text-align: left;
+  width: 150%;
+  height: 150%;
+  transform: scale(0.66);
+  transform-origin: top left;
+  pointer-events: none;
+  background: transparent;
+  animation: preview-fade-in 0.3s ease;
+}
+
+.switcher-preview-text span {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+@keyframes preview-fade-in {
+  from { opacity: 0; }
+  to { opacity: 0.85; }
+}
+
+.switcher-skeleton {
+  padding: 2px 0;
+  transition: opacity 0.2s ease;
+}
+
+.switcher-skeleton-row {
+  height: 8px;
+  margin-bottom: 6px;
+  background: var(--border-subtle);
+  border-radius: 2px;
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.switcher-skeleton-row:nth-child(2) { animation-delay: 0.1s; }
+.switcher-skeleton-row:nth-child(3) { animation-delay: 0.2s; }
+.switcher-skeleton-row:nth-child(4) { animation-delay: 0.3s; }
+.switcher-skeleton-row:nth-child(5) { animation-delay: 0.4s; }
+.switcher-skeleton-row:nth-child(6) { animation-delay: 0.5s; }
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes switcher-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

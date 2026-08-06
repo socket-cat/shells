@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.24'
+
+      - name: Build all targets + version-header checksums
+        run: |
+          for pair in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64; do
+            os=${pair%/*}
+            arch=${pair#*/}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -ldflags='-s -w' -o shells-$os-$arch .
+          done
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Version header binds the release version into the signed bytes
+          # (defeats verified downgrades). sha256sum ignores '#' lines.
+          printf '# shells %s\n' "$VERSION" > checksums.txt
+          sha256sum shells-* >> checksums.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" shells-* checksums.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" shells-* checksums.txt \
+              --title "Shells $GITHUB_REF_NAME" \
+              --notes "Static binaries for Linux, macOS, and FreeBSD (amd64/arm64). Verify with checksums.txt."
+          fi
+          # The Ed25519 signature over checksums.txt is published on the
+          # independent socket.cat channel by the offline signer
+          # (scripts/sign-release.sh) — never on GitHub, to keep the
+          # cross-channel trust model intact.
