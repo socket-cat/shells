@@ -58,6 +58,10 @@
     min-width: 20px;
     min-height: 20px;
   }
+
+  .tile-more { display: none; }
+  .tile-actions.more-open .tile-more { display: contents; }
+  .tile-actions.more-open .tile-more-btn { display: none; }
 }
 
 .mobile-gesture-layer {

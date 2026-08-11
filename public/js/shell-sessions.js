@@ -2445,22 +2445,39 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const actions = document.createElement('div');
     actions.className = 'tile-actions';
 
+    const mobile = this._isMobile();
+    const moreWrap = mobile ? document.createElement('span') : null;
+    if (moreWrap) moreWrap.className = 'tile-more';
+    const more = (btn) => (moreWrap || actions).appendChild(btn);
+
     actions.appendChild(switcherBtn);
     const isStandalone = window.isStandalonePWA ? window.isStandalonePWA() : false;
     if (!isStandalone) actions.appendChild(createBtn('Install app', 'install-pwa', null, window.Icons.download, 'install-btn'));
-    if (!this._isMobile()) {
-      actions.appendChild(createBtn('Promote to Master', 'promote-master', id, window.Icons.promote));
-    }
+    if (!mobile) actions.appendChild(createBtn('Promote to Master', 'promote-master', id, window.Icons.promote));
     actions.appendChild(createBtn('New shell', 'new-shell', null, window.Icons.plus));
-    if (!this._isMobile()) {
-      actions.appendChild(createBtn('Cycle Layout', 'cycle-layout', null, window.Icons.layout));
+    if (!mobile) actions.appendChild(createBtn('Cycle Layout', 'cycle-layout', null, window.Icons.layout));
+    if (mobile) {
+      const moreBtn = createBtn('More', 'toggle-overflow', null, window.Icons.overflow, 'tile-more-btn');
+      const onOutside = (e) => {
+        if (!actions.contains(e.target)) {
+          actions.classList.remove('more-open');
+          document.removeEventListener('click', onOutside, true);
+        }
+      };
+      moreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        actions.classList.add('more-open');
+        setTimeout(() => document.addEventListener('click', onOutside, true), 0);
+      });
+      actions.appendChild(moreBtn);
     }
-    actions.appendChild(createBtn('Choose Theme', 'toggle-theme', null, window.Icons.themeCircle));
-    actions.appendChild(createBtn('Smaller font', 'font-minus', null, '<span class="fs-a">A</span>'));
-    actions.appendChild(createBtn('Bigger font', 'font-plus', null, '<span class="fs-a fs-a--lg">A</span>'));
-    actions.appendChild(createBtn('Search', 'open-search', id, window.Icons.search));
-    if (this._isMobile()) actions.appendChild(createBtn('Keyboard', 'open-keyboard', id, window.Icons.keyboard));
-    actions.appendChild(createBtn('Fullscreen', 'toggle-fullscreen', id, window.Icons.maximize));
+    more(createBtn('Choose Theme', 'toggle-theme', null, window.Icons.themeCircle));
+    more(createBtn('Smaller font', 'font-minus', null, '<span class="fs-a">A</span>'));
+    more(createBtn('Bigger font', 'font-plus', null, '<span class="fs-a fs-a--lg">A</span>'));
+    more(createBtn('Search', 'open-search', id, window.Icons.search));
+    if (mobile) more(createBtn('Keyboard', 'open-keyboard', id, window.Icons.keyboard));
+    more(createBtn('Fullscreen', 'toggle-fullscreen', id, window.Icons.maximize));
+    if (moreWrap) actions.appendChild(moreWrap);
     actions.appendChild(createBtn('Close', 'destroy-shell', id, window.Icons.close));
     actions.appendChild(createBtn('Lock', 'lock', null, window.Icons.lock));
 
