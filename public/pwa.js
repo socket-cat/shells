@@ -29,7 +29,12 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// 1b. Update available → top bar with an Update button (code-server style)
+// 1b. Static-asset (service-worker) updates are harmless — the server-side
+// shells keep running and reconnect after the reload — so they apply silently
+// when the command bar is empty. Only when the user has typed a pending
+// command in the command bar do we fall back to the Update/Later prompt (that
+// typed input would be lost on reload). Either way, the reload ends with a
+// non-blocking "Updated to vX.Y.Z" toast.
 (function () {
   if (!('serviceWorker' in navigator)) return;
 
@@ -44,12 +49,74 @@ if ('serviceWorker' in navigator) {
     window.location.reload();
   });
 
-  // Prompt for a waiting service worker on load too, so a deferred update
-  // re-surfaces on the next visit instead of being silently stuck.
+  // After a reload onto a new version, show "Updated to vX.Y.Z" once the load
+  // screen is out of the way (or after a 10s safety timeout).
+  (function toastUpdated() {
+    let newV;
+    try { newV = sessionStorage.getItem('shells-updated-to'); } catch (_) {}
+    if (!newV) return;
+    try { sessionStorage.removeItem('shells-updated-to'); } catch (_) {}
+    const start = Date.now();
+    (function wait() {
+      const ready = window.TuiDialog && window.TuiDialog.toast && !document.getElementById('load-screen');
+      if (ready || Date.now() - start > 10000) {
+        if (window.TuiDialog && window.TuiDialog.toast) {
+          window.TuiDialog.toast(`Updated to v${newV}`, 'success');
+        }
+        return;
+      }
+      setTimeout(wait, 200);
+    })();
+  })();
+
+  // Live server version when it's a real bump (new != current), else null.
+  const fetchVersions = () =>
+    fetch('/api/health', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => {
+        if (!h) return null;
+        const newV = String(h.version || '').replace(/^v/, '');
+        const oldV = document.body.dataset.version || '';
+        return newV && newV !== oldV ? { newV, oldV } : null;
+      })
+      .catch(() => null);
+
+  // Remember the version we're moving to, then release the waiting worker;
+  // the controllerchange handler reloads.
+  const stashNewVersion = () =>
+    fetchVersions().then((v) => {
+      if (v) { try { sessionStorage.setItem('shells-updated-to', v.newV); } catch (_) {} }
+    });
+
+  const releaseWorker = () => {
+    updateRequested = true;
+    if (updateWorker) { try { updateWorker.postMessage('SKIP_WAITING'); } catch (_) {} }
+  };
+
+  const applyUpdate = () => {
+    if (updateRequested || reloading) return;
+    stashNewVersion().finally(releaseWorker);
+  };
+
+  // Has the user typed a pending command in the command bar? On desktop the
+  // bar is hidden, so this is always empty — a reload there is harmless since
+  // the server-side shells survive (per the user: "we have terminals on bg").
+  const cmdBarEmpty = () => {
+    const input = document.getElementById('cmd-input');
+    return !input || !input.value || !input.value.trim();
+  };
+
+  const onUpdateReady = () => {
+    if (cmdBarEmpty()) applyUpdate();
+    else showUpdateBar();
+  };
+
+  // A waiting service worker also surfaces on load, so a deferred update isn't
+  // silently stuck — it's just applied (or prompted) again.
   const promptWaiting = (registration) => {
     if (registration.waiting && registration.waiting.state === 'installed') {
       updateWorker = registration.waiting;
-      showUpdateBar();
+      onUpdateReady();
     }
   };
 
@@ -61,7 +128,7 @@ if ('serviceWorker' in navigator) {
       updateWorker = newWorker;
       newWorker.addEventListener('statechange', () => {
         if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-          showUpdateBar();
+          onUpdateReady();
         }
       });
     });
@@ -77,12 +144,9 @@ if ('serviceWorker' in navigator) {
     line.textContent = 'A new version of the app is ready.';
     message.appendChild(line);
     // Show "prev → new" versions when health is reachable.
-    fetch('/api/health', { cache: 'no-store' }).then((r) => r.ok ? r.json() : null).then((h) => {
-      if (!h) return;
-      const newV = String(h.version || '').replace(/^v/, '');
-      const oldV = document.body.dataset.version || '';
-      if (newV && newV !== oldV) line.textContent = `v${oldV} → v${newV}`;
-    }).catch(() => {});
+    fetchVersions().then((v) => {
+      if (v) line.textContent = `v${v.oldV} → v${v.newV}`;
+    });
     window.TuiDialog.confirm('Update available', message, {
       confirmText: 'Update',
       cancelText: 'Later',
@@ -90,8 +154,7 @@ if ('serviceWorker' in navigator) {
     }).then((ok) => {
       updateModalShown = false;
       if (ok) {
-        updateRequested = true;
-        if (updateWorker) { try { updateWorker.postMessage('SKIP_WAITING'); } catch (_) {} }
+        stashNewVersion().finally(releaseWorker);
       }
     });
   }
@@ -140,13 +203,10 @@ window.pwaReloadAfterUpdate = async function pwaReloadAfterUpdate() {
       reg.addEventListener('updatefound', onFound);
       activate(reg.waiting);
       await reg.update();
-      // Fallback: if the new SW never activates, clear the flag and reload.
+      // Fallback: if the new SW never activates, reload anyway.
       setTimeout(() => {
-        if (!window.__shellsAutoReloaded) {
-          window.__shellsAutoReloaded = true;
-          window.__shellsAutoReload = false;
-          window.location.reload();
-        }
+        window.__shellsAutoReload = false;
+        window.location.reload();
       }, 8000);
     } catch (_) {
       window.__shellsAutoReload = false;
