@@ -29,7 +29,7 @@ import (
 const (
 	KeepaliveIntervalMs  = 30000
 	MaxClientsPerSession = 50
-	OutputBufferMax      = 65536 // ~64KB ring buffer per session
+	OutputBufferMax      = 262144 // ~256KB ring buffer per session (pause/replay buffer)
 	WSHWM                = 512 * 1024
 	WSLWM                = 64 * 1024
 	WSCWM                = 2048 * 1024

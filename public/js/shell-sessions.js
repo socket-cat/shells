@@ -2334,6 +2334,10 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     interceptor.addEventListener('mousedown', (e) => {
       e.preventDefault(); e.stopPropagation();
       this.setActive(sid);
+      if (!this._isActiveClient.get(sid)) {
+        window.__dbg?.trace('claim', { sid: String(sid), reason: 'interceptor' });
+        this._claimActiveIfNeeded(sid, session, session.term, session.fitAddon);
+      }
       if (!dragging) {
         dragging = true;
         document.addEventListener('mousemove', docMouseMove, true);
