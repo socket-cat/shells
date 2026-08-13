@@ -241,31 +241,13 @@ window._dispatchTerminalMouse = function(term, type, clientX, clientY, buttons) 
 
 window._focusWithoutScroll = function(term) {
   try {
-    const buffer = term.buffer?.active;
-    if (!buffer) {
-      term.focus();
-      return;
-    }
-    const beforeViewportY = buffer.viewportY;
-    const beforeBaseY = buffer.baseY;
-
+    window.__dbg?.trace('focus.start', { sid: term._sid || '?' });
     try {
       term.focus({ preventScroll: true });
     } catch (_) {
       term.focus();
     }
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          const afterViewportY = buffer.viewportY;
-          const afterBaseY = buffer.baseY;
-          if (beforeViewportY !== afterViewportY || beforeBaseY !== afterBaseY) {
-            term.scrollLines(beforeViewportY - afterViewportY);
-          }
-        } catch (_) {}
-      });
-    });
+    window.__dbg?.trace('focus.ok', { sid: term._sid || '?' });
   } catch (_) {
     try {
       term.focus({ preventScroll: true });
@@ -455,12 +437,29 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
                 const session = this.sessions.get(sid);
               if (session) {
                 const p = countPrintable(payload, RUN_MIN_CHARS);
+                window.__dbg?.trace('write.start', {
+                  sid,
+                  bytes: payload.length,
+                  printable: p,
+                  viewportY: session.term.buffer?.active?.viewportY,
+                  baseY: session.term.buffer?.active?.baseY,
+                  ydisp: session.term.buffer?.active?.ydisp,
+                  active: this.activeId === sid,
+                  head: payload.subarray(0, 48).length ? String.fromCharCode.apply(null, payload.subarray(0, 48)).replace(/[^\x20-\x7e]/g, (c) => '<' + c.charCodeAt(0).toString(16) + '>') : '',
+                });
                 if (p >= ARM_CHARS && Date.now() - (session.lastInputAt || 0) >= INPUT_IDLE_MS) {
                   session.lastOutputAt = Date.now();
                   session.runPrintable = Math.min(RUN_MIN_CHARS, session.runPrintable + p);
                 }
                 session.term.write(payload, () => {
                   if (this._pendingSwitcherSessions) this._checkAllReady();
+                  window.__dbg?.trace('write.done', {
+                    sid,
+                    viewportY: session.term.buffer?.active?.viewportY,
+                    baseY: session.term.buffer?.active?.baseY,
+                    cols: session.term.cols,
+                    rows: session.term.rows,
+                  });
                 });
               }
               }
@@ -622,11 +621,16 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
                   this._reconnectTimer = null;
                 }
 
+                // Sessions present before sync() survived the disconnect: their
+                // xterm content is still intact, so re-attach with resume to
+                // skip the server-side reset + full replay (no jump-to-top).
+                const resumed = new Set(this.sessions.keys());
+
                 await new Promise(r => setTimeout(r, 50));
                 await this.sync();
 
                 for (const [sid, s] of this.sessions) {
-                  await this.sendWs({ type: 'attach', sid, cols: s.term.cols, rows: s.term.rows });
+                  await this.sendWs({ type: 'attach', sid, cols: s.term.cols, rows: s.term.rows, resume: resumed.has(sid) });
                   if (s.isAsleep) await this.sendWs({ type: 'pause', sid });
                 }
                 this._setLoadProgress(100);
@@ -671,6 +675,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
             if (inner.type === 'pty-size') {
               this._handlePtySize(inner.sid, inner.cols, inner.rows, inner.isActive);
             } else if (inner.type === 'reset') {
+              window.__dbg?.trace('term.reset', { sid: inner.sid, reason: 'server-reset', viewportY: session.term.buffer?.active?.viewportY, baseY: session.term.buffer?.active?.baseY });
               session.term.reset();
             } else if (inner.type === 'exit') {
               if (session.remotelyClosed) return;
@@ -770,6 +775,10 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         return true;
       }
       
+      if (msg.type === 'resize' || msg.type === 'available-size' || msg.type === 'claim-active' || msg.type === 'attach' || msg.type === 'detach' || msg.type === 'pause' || msg.type === 'resume') {
+        window.__dbg?.trace('sendWs', { type: msg.type, sid: msg.sid, cols: msg.cols, rows: msg.rows, wsReady: !!(this.ws && this.ws.readyState === 1 && this._wsReady) });
+      }
+
       this._sendQueue = this._sendQueue.then(async () => {
         try {
           const encrypted = await window.ShellsCrypto.encrypt(this.cryptoState, JSON.stringify(msg));
@@ -2141,7 +2150,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     session._scaleFactor = 1.0;
     requestAnimationFrame(() => {
       if (fitAddon) {
+        window.__dbg?.trace('fit.call', { sid: String(id), source: 'claim-active' });
         try { fitAddon.fit(); } catch (_) {}
+        window.__dbg?.trace('fit.done', { sid: String(id), source: 'claim-active' });
       }
     });
     if (!this._lastClaimActive) this._lastClaimActive = new Map();
@@ -2165,6 +2176,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       this._pendingPtySize.set(sid, { cols, rows, isActive });
       return;
     }
+    window.__dbg?.trace('ptySize.recv', { sid, cols, rows, isActive });
 
     this._ptySizes.set(sid, { cols, rows });
     this._isActiveClient.set(sid, !!isActive);
@@ -2174,12 +2186,15 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       session._scaleFactor = 1.0;
       requestAnimationFrame(() => {
         if (session.fitAddon) {
+          window.__dbg?.trace('fit.call', { sid: String(sid), source: 'pty-size-active' });
           try { session.fitAddon.fit(); } catch (_) {}
+          window.__dbg?.trace('fit.done', { sid: String(sid), source: 'pty-size-active' });
         }
       });
     } else {
       requestAnimationFrame(() => {
         if (session.term.cols !== cols || session.term.rows !== rows) {
+          window.__dbg?.trace('ptySize.resize', { sid, cols, rows });
           try { session.term.resize(cols, rows); } catch (_) {}
         }
         this._applyScaling(session, sid, cols, rows);
@@ -2195,6 +2210,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     const dims = session.term._core?._renderService?.dimensions;
     if (!dims || dims.css.cell.width === 0 || dims.css.cell.height === 0) {
+      window.__dbg?.trace('applyScaling.retry', { sid, retryCount });
       setTimeout(() => this._applyScaling(session, sid, ptyCols, ptyRows, retryCount + 1), 100 * Math.pow(1.5, retryCount));
       return;
     }
@@ -2211,6 +2227,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       availableHeight / ptyPixelHeight,
       1.0
     );
+    window.__dbg?.trace('applyScaling', { sid, pty: ptyCols + 'x' + ptyRows, avail: availableWidth + 'x' + availableHeight, scale: scaleFactor });
 
     session._scaleFactor = scaleFactor;
     session._cachedBodyRect = null;
@@ -2509,13 +2526,15 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       lineHeight: 1,
       fontFamily: "'Fira Code', monospace",
       fontLigatures: true,
-      scrollback: 5000,
+      // mobile gets a lighter scrollback so resizes don't re-wrap a huge buffer (the full 5000 stays on desktop)
+      scrollback: this._isMobile() ? 1500 : 5000,
       theme: (window.ShellTheme && window.ShellTheme.xtermTheme) || window.darkTheme || { background: '#000000' },
       allowTransparency: false,
       allowProposedApi: true,
       drawBoldTextInBrightColors: true,
       minimumContrastRatio: 4.5,
-      smoothScrollDuration: 100,
+      scrollOnUserInput: false,
+      smoothScrollDuration: 0,
       fastScrollModifier: 'alt',
       fastScrollSensitivity: 5,
       scrollSensitivity: 1,
@@ -2524,6 +2543,21 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(body);
+    term._sid = id;
+
+    const vpEl = term.element?.querySelector('.xterm-viewport');
+    if (vpEl) {
+      vpEl.addEventListener('scroll', () => {
+        window.__dbg?.trace('viewport.scroll', {
+          sid: String(id),
+          scrollTop: Math.round(vpEl.scrollTop),
+          clientHeight: vpEl.clientHeight,
+          scrollHeight: vpEl.scrollHeight,
+          viewportY: term.buffer?.active?.viewportY,
+          baseY: term.buffer?.active?.baseY,
+        });
+      }, { passive: true });
+    }
 
     try {
       const webglAddon = new WebglAddon.WebglAddon();
@@ -2675,13 +2709,34 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       }, { capture: true });
       gestureLayer.addEventListener('touchcancel', resetTouchGesture, { capture: true });
 
+    const fitPreservingView = () => {
+      const b = term.buffer && term.buffer.active;
+      const vy = b ? b.viewportY : 0;
+      const by = b ? b.baseY : 0;
+      window.__dbg?.trace('fit.call', { sid: String(id), source: 'ro-active' });
+      try { fitAddon.fit(); } catch (_) {}
+      window.__dbg?.trace('fit.done', { sid: String(id), source: 'ro-active' });
+      // A rows-only resize does not rewrap content: restore the viewport so the
+      // user keeps seeing the same content (baseY unchanged proves no reflow).
+      requestAnimationFrame(() => {
+        const b2 = term.buffer && term.buffer.active;
+        if (b2 && b2.baseY === by && b2.viewportY !== vy) {
+          try { term.scrollLines(vy - b2.viewportY); } catch (_) {}
+        }
+      });
+    };
+
     const ro = new ResizeObserver(() => {
       try {
         const isActive = this._isActiveClient.get(id);
+        window.__dbg?.trace('resizeObserver', { sid: String(id), isActive, bodyW: body.clientWidth, bodyH: body.clientHeight, termCols: term.cols, termRows: term.rows });
         if (isActive !== false) {
-          requestAnimationFrame(() => {
-            try { fitAddon.fit(); } catch (_) {}
-          });
+          clearTimeout(session._fitSettle);
+          session._fitSettle = setTimeout(() => {
+            requestAnimationFrame(() => {
+              fitPreservingView();
+            });
+          }, 300);
         } else {
           requestAnimationFrame(() => {
             const proposed = fitAddon.proposeDimensions();
@@ -2698,7 +2753,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     });
     ro.observe(body);
 
-    const session = { term, fitAddon, searchAddon, tile, cwd, ro, backendBadge: backendBadge || null, isAsleep: false, title: title || `shell #${id}`, _suppressBellUntil: Date.now() + 3000, _scaleFactor: 1.0, _cachedBodyRect: null, lastOutputAt: 0, _busy: false, _inRun: false, _runStart: 0, runPrintable: 0, lastInputAt: 0, _bellLatched: false };
+    const session = { term, fitAddon, searchAddon, tile, cwd, ro, backendBadge: backendBadge || null, isAsleep: false, title: title || `shell #${id}`, _suppressBellUntil: Date.now() + 3000, _scaleFactor: 1.0, _cachedBodyRect: null, lastOutputAt: 0, _busy: false, _inRun: false, _runStart: 0, runPrintable: 0, lastInputAt: 0, _bellLatched: false, _fitSettle: null, _lastSentCols: null };
 
     term.onBell(() => {
       if (this._bellSuppressed || Date.now() < session._suppressBellUntil) return;
@@ -2726,8 +2781,17 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       this.sendWs({ type: 'data', sid: id, data });
     });
     term.onResize(({ cols, rows }) => {
+      window.__dbg?.trace('term.onResize', { sid: String(id), cols, rows, isActive: this._isActiveClient.get(id) });
       if (this._isActiveClient.get(id) !== false) {
-        this.sendWs({ type: 'resize', sid: id, cols, rows });
+        const colsChanged = cols !== session._lastSentCols;
+        // On mobile, a keyboard/URL-bar toggle changes only the row count; skip
+        // propagating it so the PTY (and a full-screen TUI) isn't SIGWINCH'd into
+        // clearing the scrollback on every toggle. A real reflow (cols change) is
+        // always propagated. Desktop keeps the existing behavior (always send).
+        if (colsChanged || !this._isMobile()) {
+          session._lastSentCols = cols;
+          this.sendWs({ type: 'resize', sid: id, cols, rows });
+        }
       }
     });
     this.sessions.set(id, session);
@@ -2822,6 +2886,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       }
     }
     this.updateSleepState();
+    if (session && session.term && !this._isActiveClient.get(id)) {
+      this._claimActiveIfNeeded(id, session, session.term, session.fitAddon);
+    }
     this._ensureFullscreenMobile(id);
     if (session?.term) window._focusWithoutScroll(session.term);
   },
@@ -2986,11 +3053,15 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     if (next === this._getFontSize()) return;
     this._fontSize = next;
     try { localStorage.setItem('shells-font-size', String(next)); } catch (_) {}
-    this.sessions.forEach((s) => {
+    this.sessions.forEach((s, sid) => {
       if (s.term) {
         try {
           s.term.options.fontSize = next;
-          if (s.fitAddon) s.fitAddon.fit();
+          if (s.fitAddon) {
+            window.__dbg?.trace('fit.call', { sid: String(sid), source: 'font-size' });
+            s.fitAddon.fit();
+            window.__dbg?.trace('fit.done', { sid: String(sid), source: 'font-size' });
+          }
         } catch (_) {}
       }
     });
@@ -3003,7 +3074,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   // the renderer for the whole origin (RESULT_CODE_HUNG).
   setWebglEnabled(enabled) {
     const Addon = window.WebglAddon && window.WebglAddon.WebglAddon;
-    this.sessions.forEach((s) => {
+    this.sessions.forEach((s, sid) => {
       const term = s.term;
       if (!term) return;
       if (enabled) {
@@ -3013,7 +3084,11 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           w.onContextLoss(() => { try { w.dispose(); } catch (_) {} term._webglAddon = null; });
           term.loadAddon(w);
           term._webglAddon = w;
-          if (s.fitAddon) { try { s.fitAddon.fit(); } catch (_) {} }
+          if (s.fitAddon) {
+            window.__dbg?.trace('fit.call', { sid: String(sid), source: 'webgl' });
+            try { s.fitAddon.fit(); } catch (_) {}
+            window.__dbg?.trace('fit.done', { sid: String(sid), source: 'webgl' });
+          }
           try { term.refresh(0, term.rows - 1); } catch (_) {}
         } catch (_) { term._webglAddon = null; }
       } else if (term._webglAddon) {

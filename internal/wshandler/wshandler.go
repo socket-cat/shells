@@ -42,7 +42,6 @@ const (
 type attachState struct {
 	isPaused      bool
 	isThrottled   bool
-	missedData    bool
 	clientBuffer  *ringbuf.Buffer
 	coalesceBuf   []byte
 	coalesceTimer *time.Timer
@@ -546,6 +545,13 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		rows = 24
 	}
 
+	// resume: the client re-attached after a WS drop and kept its terminal
+	// content across the disconnect, so skip the reset + full replay.
+	resume := false
+	if v, ok := msg["resume"].(bool); ok {
+		resume = v
+	}
+
 	st := &attachState{
 		clientCols:   cols,
 		clientRows:   rows,
@@ -603,21 +609,38 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 	})
 	cc.sendEncrypted(ptySize, nil)
 
-	// Clear terminal before replay so reconnecting clients don't
-	// duplicate old output on top of what the terminal already shows.
-	reset, _ := json.Marshal(map[string]any{"type": "reset", "sid": sid})
-	cc.sendEncrypted(reset, nil)
+	// Fresh attach: clear terminal before replay so reconnecting clients don't
+	// duplicate old output on top of what the terminal already shows. On
+	// resume the client kept its terminal content across the disconnect, so
+	// skip both the reset and the full ring replay (no wipe, no jump-to-top).
+	if !resume {
+		reset, _ := json.Marshal(map[string]any{"type": "reset", "sid": sid})
+		cc.sendEncrypted(reset, nil)
 
-	// Replay buffered output + title.  onPtyData cannot race here because
-	// it needs cc.mu and we still hold it.  The PTY OnData callback is
-	// registered above but dispatch waits for this lock to be released.
-	cc.replayBuffer(sid, s, st)
+		// Replay buffered output + title.  onPtyData cannot race here because
+		// it needs cc.mu and we still hold it.  The PTY OnData callback is
+		// registered above but dispatch waits for this lock to be released.
+		cc.replayBuffer(sid, s, st)
+	}
 
 	// Restore active DEC modes.
 	modes := s.GetRestorableDecModes(cc.cfg)
 	if len(modes) > 0 {
 		modeStr := "\x1b[?" + strings.Join(modes, ";") + "h"
 		cc.sendEncrypted([]byte(modeStr), st.sidBuf)
+	}
+
+	// If the session is in the alternate screen, re-enter it on the client and
+	// force a full TUI redraw: the fresh-attach reset exits alt-screen and the
+	// replay only carries incremental diffs, so the static frame would
+	// otherwise be lost until the next resize. On resume the client already
+	// sits in the alternate screen, so only signal a winch to make the TUI
+	// redraw its full frame (the disconnect gap lost its diffs).
+	if s.InAlternateScreen() {
+		if !resume {
+			cc.sendEncrypted([]byte("\x1b[?1049h"), st.sidBuf)
+		}
+		_ = s.Term.SignalWinch()
 	}
 
 	cc.mu.Unlock()
@@ -638,6 +661,11 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 	})
 }
 
+// replayBuffer sends the session title (if set) and the buffered output
+// snapshot to a newly attached client, batching chunks into frames and
+// throttling into the client ring when the socket write queue exceeds WSHWM.
+//
+// The caller must already hold cc.mu (sendEncrypted does not touch cc.mu).
 func (cc *ClientConn) replayBuffer(sid string, s *session.Session, st *attachState) {
 	title := s.GetTitle()
 	defaultTitle := s.DefaultTitle
@@ -661,12 +689,11 @@ func (cc *ClientConn) replayBuffer(sid string, s *session.Session, st *attachSta
 		batchBytes += len(chunk)
 		if batchBytes > 32768 {
 			if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-				// Throttle: buffer the rest.
-				cc.mu.Lock()
+				// Throttle: buffer the rest.  cc.mu is already held by the
+				// caller (handleAttach), so do not re-lock it here.
 				st.isThrottled = true
 				merged := concatBytes(batch)
 				st.clientBuffer.Push(merged, len(merged))
-				cc.mu.Unlock()
 				return
 			}
 			frame := concatBytes(batch)
@@ -679,10 +706,9 @@ func (cc *ClientConn) replayBuffer(sid string, s *session.Session, st *attachSta
 	if batchBytes > 0 {
 		frame := concatBytes(batch)
 		if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-			cc.mu.Lock()
+			// cc.mu is already held by the caller (handleAttach).
 			st.isThrottled = true
 			st.clientBuffer.Push(frame, len(frame))
-			cc.mu.Unlock()
 		} else {
 			cc.sendEncrypted(frame, st.sidBuf)
 		}
@@ -708,9 +734,7 @@ func (cc *ClientConn) onPtyData(sid string, data []byte) {
 	}
 
 	if st.isPaused || st.isThrottled {
-		if st.clientBuffer.Push(data, len(data)) {
-			st.missedData = true
-		}
+		st.clientBuffer.Push(data, len(data))
 		return
 	}
 
@@ -877,36 +901,26 @@ func (cc *ClientConn) backpressureCheck() {
 }
 
 // flushClientBufferLocked flushes buffered output for a throttled session.
+//
+// It drains the per-client ring of *unsent* output as ordinary data frames —
+// never a destructive reset. The client's screen and scrollback stay intact;
+// the worst that happens on a saturated link is a transient gap of evicted
+// head bytes, which is strictly better than the old behaviour of wiping the
+// terminal and replaying the whole snapshot on every LWM crossing (that wiped
+// scrollback and caused a "redraw whole buffer again and again" storm).
+//
+// A reset+snapshot replay remains only on attach (replayBuffer), where it is
+// the legitimate "clear before replay to avoid duplicated old output" case.
+//
 // The caller must already hold cc.mu (sendEncrypted does not touch cc.mu).
 func (cc *ClientConn) flushClientBufferLocked(sid string, st *attachState, s *session.Session) {
-	if st.missedData {
-		reset, _ := json.Marshal(map[string]any{"type": "reset", "sid": sid})
-		cc.sendEncrypted(reset, nil)
-		title := s.GetTitle()
-		if title != "" && title != s.DefaultTitle {
-			cc.sendEncrypted([]byte("\x1b]0;"+title+"\x07"), st.sidBuf)
+	for st.clientBuffer.Len() > 0 {
+		if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
+			st.isThrottled = true
+			return
 		}
-		for _, chunk := range s.OutputSnapshot() {
-			if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-				st.isThrottled = true
-				return
-			}
-			cc.sendEncrypted(chunk, st.sidBuf)
-		}
-		modes := s.GetRestorableDecModes(cc.cfg)
-		if len(modes) > 0 {
-			cc.sendEncrypted([]byte("\x1b[?"+strings.Join(modes, ";")+"h"), st.sidBuf)
-		}
-		st.missedData = false
-	} else {
-		for st.clientBuffer.Len() > 0 {
-			if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-				st.isThrottled = true
-				return
-			}
-			chunk := st.clientBuffer.Shift()
-			cc.sendEncrypted(chunk, st.sidBuf)
-		}
+		chunk := st.clientBuffer.Shift()
+		cc.sendEncrypted(chunk, st.sidBuf)
 	}
 	if cc.ws.BufferedAmount() < int64(cc.cfg.WSLWM) {
 		st.isThrottled = false

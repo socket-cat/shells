@@ -30,6 +30,13 @@ type Backend struct {
 	Hostname     string
 }
 
+// maxCarry bounds the carry buffer when the PTY emits an unterminated escape
+// sequence (e.g. ESC ] followed by binary with no BEL/ST): the parser stays
+// mid-OSC, safe stays 0, and every byte would otherwise be appended to carry
+// and held out of the ring indefinitely. Matches the stream parser's own
+// oscText cap.
+const maxCarry = 4096
+
 // Session represents one live terminal.
 type Session struct {
 	ID           string
@@ -49,6 +56,11 @@ type Session struct {
 	activeModes  map[string]bool
 	streamParser *stream.Parser
 	destroyed    bool
+	// carry holds the trailing bytes of a partially-received escape sequence
+	// (parser not back in the ground state). It is prepended to the next
+	// chunk before pushing to outputBuffer so replayed chunks never start
+	// mid-sequence. Only touched from the session's OnData goroutine.
+	carry []byte
 
 	// Set by wshandler to identify the active (foreground) client for this
 	// session — the one whose dimensions are applied to the PTY. Compared by
@@ -219,10 +231,48 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		}
 		// Parse first without holding s.mu, since the stream parser
 		// callbacks (setMode, setTitle) also acquire s.mu.
-		s.streamParser.Parse(data)
-		s.mu.Lock()
-		s.outputBuffer.Push(data, len(data))
-		s.mu.Unlock()
+		safe := s.streamParser.Parse(data)
+		if safe == 0 {
+			// The whole chunk is a continuation of a partial escape
+			// sequence: accumulate it in carry and push nothing, since an
+			// incomplete sequence must never reach the ring.
+			if len(data) > 0 {
+				if len(s.carry) >= maxCarry {
+					// Pathological-case bound: an unterminated sequence
+					// (e.g. ESC ] + binary, no BEL/ST) would otherwise grow
+					// carry forever. Flush the accumulated bytes as a
+					// best-effort chunk — it may start mid-sequence, but
+					// that is preferable to unbounded memory. The ring
+					// retains the slice by reference, so push a copy
+					// before carry's backing array is reused.
+					flush := make([]byte, len(s.carry))
+					copy(flush, s.carry)
+					s.carry = s.carry[:0]
+					s.mu.Lock()
+					s.outputBuffer.Push(flush, len(flush))
+					s.mu.Unlock()
+				}
+				s.carry = append(s.carry, data...)
+			}
+			return
+		}
+		// Only push bytes that end on a clean boundary, re-attaching any
+		// trailing partial escape sequence from the previous chunk so a
+		// replayed ring never starts mid-sequence.
+		var toPush []byte
+		if len(s.carry) > 0 {
+			toPush = make([]byte, 0, len(s.carry)+safe)
+			toPush = append(toPush, s.carry...)
+			toPush = append(toPush, data[:safe]...)
+		} else {
+			toPush = data[:safe]
+		}
+		s.carry = append(s.carry[:0], data[safe:]...)
+		if len(toPush) > 0 {
+			s.mu.Lock()
+			s.outputBuffer.Push(toPush, len(toPush))
+			s.mu.Unlock()
+		}
 	})
 
 	// Auto-destroy on process exit.
@@ -334,6 +384,14 @@ func (s *Session) GetRestorableDecModes(cfg *config.Config) []string {
 		}
 	}
 	return modes
+}
+
+// InAlternateScreen reports whether the session's terminal is currently in the
+// alternate screen buffer (DEC mode 1049).
+func (s *Session) InAlternateScreen() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeModes["1049"]
 }
 
 // OutputSnapshot returns a copy of all buffered output chunks for replay.

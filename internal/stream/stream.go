@@ -62,9 +62,13 @@ func New(onMode ModeFunc, onTitle TitleFunc) *Parser {
 	return &Parser{onMode: onMode, onTitle: onTitle}
 }
 
-// Parse feeds the next chunk of bytes to the state machine.
-func (p *Parser) Parse(buf []byte) {
+// Parse feeds the next chunk of bytes to the state machine and returns the
+// length of the leading prefix of buf that ends on a clean boundary (i.e. the
+// parser is back in the ground state after the last byte), so the caller can
+// avoid replaying a chunk that starts mid-escape-sequence.
+func (p *Parser) Parse(buf []byte) int {
 	state := p.state
+	lastGround := 0
 	for i := 0; i < len(buf); i++ {
 		b := buf[i]
 		switch state {
@@ -181,6 +185,10 @@ func (p *Parser) Parse(buf []byte) {
 				state = sOscText
 			}
 		}
+		if state == sGround {
+			lastGround = i + 1
+		}
 	}
 	p.state = state
+	return lastGround
 }

@@ -121,6 +121,23 @@ func (t *Term) Resize(cols, rows int) error {
 	return setWinsize(t.master.Fd(), cols, rows)
 }
 
+// SignalWinch delivers SIGWINCH to the foreground process group of the PTY by
+// writing a winsize whose pixel fields differ, prompting full-screen TUIs
+// (vim, htop, …) to redraw their frame without a visible resize. (TIOCSIG
+// cannot be used: the Linux kernel only honours SIGINT/SIGQUIT/SIGTSTP there.)
+func (t *Term) SignalWinch() error {
+	var ws winsize
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws))); errno != 0 {
+		return errno
+	}
+	ws.Xpixel ^= 1
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCSWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
 // Kill sends SIGKILL to the child's entire process group (the child is a
 // session leader due to Setsid).
 func (t *Term) Kill() error {
