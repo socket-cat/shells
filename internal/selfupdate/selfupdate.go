@@ -35,6 +35,12 @@ import (
 // staged — swap and restart". Matches exitCodeRestart in internal/api.
 const restartCode = 42
 
+// PortBusyCode is the exit code the server child reports when it cannot bind
+// its port (another instance already holds it). The supervisor treats it as
+// "stop cleanly" instead of a crash, so a duplicate launch exits instead of
+// crash-looping forever.
+const PortBusyCode = 3
+
 // Enabled reports whether the current process should run its own child for
 // self-update: true for every process except the child itself (marked with the
 // internal SHELLS_SELFUPDATE_CHILD=1).
@@ -90,6 +96,11 @@ func Run() {
 		logf("child exited rc=%d", rc)
 
 		switch rc {
+		case PortBusyCode:
+			// Another instance already owns the port: nothing to restart, and
+			// retrying would just burn the loop forever. Exit cleanly.
+			logf("port already in use — another instance is running, exiting")
+			os.Exit(0)
 		case restartCode:
 			// Re-verify the staged binary against its sidecar digest before we
 			// ever execute or install it (rejects symlinks and tampering).

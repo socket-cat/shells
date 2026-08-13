@@ -38,6 +38,7 @@ window.TuiDialog = {
     if (opts.top) {
       overlay.classList.add('tui-overlay--top');
     }
+    if (opts.zIndex) overlay.style.zIndex = opts.zIndex;
     (opts.parent || document.body).appendChild(overlay);
     return overlay;
   },
@@ -126,7 +127,10 @@ window.TuiDialog = {
   // ── Alert ──
   alert(title, message, opts = {}) {
     return new Promise((resolve) => {
-      const overlay = this._createOverlay({ parent: opts.parent });
+      // Error modals must sit above other dialogs (e.g. the host selector
+      // auto-opened on the no-sessions empty state) so the error stays visible.
+      // The value lives with the rest of the stacking scale in tui-dialog.css.
+      const overlay = this._createOverlay({ parent: opts.parent, zIndex: 'var(--z-alert)' });
       const dialog = this._createDialog(opts.size || 'medium');
       const header = this._createHeader(title, done);
       const body = document.createElement('div');

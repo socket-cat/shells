@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -170,9 +171,9 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request, body map[string]
 		q, _ := body["q"].(string)
 		util.SendJSON(w, 200, map[string]any{"matches": binpath.Search(q)}, nil)
 	case path == "/api/recent-paths":
-		h.handleRecent(w, body, h.cfg.RecentPathsFile, method)
+		h.handleRecent(w, body, h.cfg.RecentPathsFile, method, statIsDir)
 	case path == "/api/recent-commands":
-		h.handleRecent(w, body, h.cfg.RecentCommandsFile, method)
+		h.handleRecent(w, body, h.cfg.RecentCommandsFile, method, commandExists)
 	case path == "/api/branding":
 		h.handleBranding(w, r, body, method)
 	case path == "/api/ssh-connections":
@@ -342,16 +343,20 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request, body ma
 
 		s, err := h.manager.Create(cols, rows, command, cwd, backend)
 		if err != nil {
-			log.Printf("session create failed (requested): %v", err)
-			// Fallback: create default session.
-			s, err = h.manager.Create(80, 24, "", "", nil)
-			if err != nil {
-				log.Printf("session create failed (default fallback): %v", err)
-				// 200 with error field: nginx error_page can't intercept a
-				// 200, so the encrypted body reaches the browser cleanly.
-				util.SendJSON(w, 200, map[string]any{"error": "Could not start shell: " + err.Error()}, nil)
-				return
+			log.Printf("session create failed: %v", err)
+			// 200 with error field: nginx error_page can't intercept a 200,
+			// so the encrypted body reaches the browser cleanly. Never fall
+			// back to a default session — that silently opens the wrong
+			// directory and misleads the user.
+			code := "create_failed"
+			switch {
+			case errors.Is(err, session.ErrCwdUnusable):
+				code = "cwd_unusable"
+			case errors.Is(err, session.ErrCommandNotFound):
+				code = "command_not_found"
 			}
+			util.SendJSON(w, 200, map[string]any{"error": err.Error(), "code": code}, nil)
+			return
 		}
 		util.SendJSON(w, 201, map[string]any{
 			"id":       s.ID,
@@ -442,7 +447,10 @@ func (h *Handler) handleBranding(w http.ResponseWriter, r *http.Request, body ma
 	util.SendJSON(w, 200, map[string]any{"appName": st.AppName, "accent": st.Accent}, nil)
 }
 
-func (h *Handler) handleRecent(w http.ResponseWriter, body map[string]any, file, method string) {
+// handleRecent reads or writes the recent paths/commands list. valid drops
+// stale entries (paths that no longer exist, commands whose binary is gone) so
+// the UI never suggests something that would fail.
+func (h *Handler) handleRecent(w http.ResponseWriter, body map[string]any, file, method string, valid func(string) bool) {
 	// GET
 	if method == "GET" || (method == "" && body["paths"] == nil && body["commands"] == nil) {
 		data, err := os.ReadFile(file)
@@ -454,12 +462,19 @@ func (h *Handler) handleRecent(w http.ResponseWriter, body map[string]any, file,
 			}
 			return
 		}
-		var parsed any
+		var parsed []string
 		if json.Unmarshal(data, &parsed) != nil {
 			util.SendJSON(w, 200, []any{}, nil)
 			return
 		}
-		util.SendJSON(w, 200, parsed, nil)
+		cleaned := filterRecent(parsed, valid)
+		if len(cleaned) != len(parsed) {
+			// Self-heal: persist the pruned list so stale entries are gone.
+			if out, err := json.Marshal(cleaned); err == nil {
+				_ = os.WriteFile(file, out, 0o600)
+			}
+		}
+		util.SendJSON(w, 200, cleaned, nil)
 		return
 	}
 
@@ -482,25 +497,46 @@ func (h *Handler) handleRecent(w http.ResponseWriter, body map[string]any, file,
 		strs = append(strs, s)
 	}
 
-	// Deduplicate and limit.
-	seen := make(map[string]bool)
-	cleaned := make([]string, 0, len(strs))
-	for _, s := range strs {
-		if !seen[s] {
-			seen[s] = true
-			cleaned = append(cleaned, s)
-			if len(cleaned) >= 20 {
-				break
-			}
-		}
-	}
-
+	cleaned := filterRecent(strs, valid)
 	data, _ := json.Marshal(cleaned)
 	if err := os.WriteFile(file, data, 0o600); err != nil {
 		util.SendJSON(w, 500, map[string]any{"error": "Internal error"}, nil)
 		return
 	}
 	util.SendJSON(w, 200, map[string]any{"success": true}, nil)
+}
+
+// filterRecent keeps entries that pass valid, deduplicated and capped at 20.
+func filterRecent(in []string, valid func(string) bool) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !valid(s) || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+		if len(out) >= 20 {
+			break
+		}
+	}
+	return out
+}
+
+func statIsDir(p string) bool {
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
+}
+
+func commandExists(c string) bool {
+	if c == "" || strings.ContainsAny(c, " \t") {
+		return false
+	}
+	_, err := exec.LookPath(c)
+	return err == nil
 }
 
 // --- helpers ---

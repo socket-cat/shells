@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -188,6 +189,10 @@ func main() {
 	}()
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			log.Printf("port %d already in use — another instance is running", cfg.Port)
+			os.Exit(selfupdate.PortBusyCode) // supervisor stops cleanly, no crash-loop
+		}
 		log.Fatalf("server: %v", err)
 	}
 }

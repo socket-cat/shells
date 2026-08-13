@@ -1237,7 +1237,11 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     if (cwd) body.cwd = cwd;
     if (backend) body.backend = backend;
     const { ok, data, error } = await this.encryptedFetch('/api/sessions', body);
-    if (!ok) throw new Error(error || 'Failed to create shell session');
+    if (!ok) {
+      const err = new Error(error || 'Failed to create shell session');
+      err.code = (data && data.code) || 'create_failed';
+      throw err;
+    }
     const { id, cwd: finalCwd } = data;
     if (!this.masterId) this.masterId = id;
 
@@ -1699,7 +1703,37 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       }
     }
 
-    return this.create(80, 24, finalCmd, final, backend);
+    try {
+      return await this.create(80, 24, finalCmd, final, backend);
+    } catch (err) {
+      // Fail loud: never let a bad folder or missing binary silently open a
+      // session somewhere else. Prune the offender from recents — it is
+      // proven unusable.
+      const detail = (err && err.message) || '';
+      let title = 'Could not start session';
+      let message = detail;
+      if (err && err.code === 'cwd_unusable') {
+        title = 'Folder not accessible';
+        message = `"${final}" is not a valid folder.` + (detail ? `\n\n${detail}` : '');
+        try {
+          if (isSSH) this._removeSshRecentPath(backend, final);
+          else await this._removeRecentPath(final);
+        } catch (_) {}
+      } else if (err && err.code === 'command_not_found') {
+        title = 'Command not found';
+        message = `"${finalCmd}" is not installed on this machine.` + (detail ? `\n\n${detail}` : '');
+        if (finalCmd) {
+          try {
+            if (isSSH) this._removeSshRecentCommand(backend, finalCmd);
+            else await this._removeRecentCommand(finalCmd);
+          } catch (_) {}
+        }
+      }
+      try {
+        window.TuiDialog.alert(title, message);
+      } catch (_) {}
+      return null;
+    }
   },
 
   // Per-second evaluator. Two windows, decoupled:
@@ -1894,6 +1928,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       statusClose();
       if (res?.ok && res.data?.applied) {
         window.TuiDialog.toast('Server restarting...', 'success');
+        // Flag the new version so the post-reload toast says "Updated to vX".
+        try { sessionStorage.setItem('shells-updated-to', info.latest); } catch (_) {}
         // Seamless: reload onto the new version with no manual refresh.
         if (window.pwaReloadAfterUpdate) window.pwaReloadAfterUpdate();
       } else if (res?.data?.verificationFailed) {

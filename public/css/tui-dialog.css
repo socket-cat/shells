@@ -16,6 +16,15 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/* Single stacking-order source of truth for the dialog layer: dialogs sit
+ * above page UI, alerts above dialogs (so an error is never covered by the
+ * host selector), toasts above everything (transient, non-blocking). */
+:root {
+  --z-dialog: 10000;
+  --z-alert: 10001;
+  --z-toast: 10002;
+}
+
 .tui-overlay {
   position: fixed;
   inset: 0;
@@ -24,7 +33,7 @@
   align-items: center;
   justify-content: center;
   animation: tui-overlay-in 0.15s ease-out;
-  z-index: 10000;
+  z-index: var(--z-dialog);
 }
 
 .tui-overlay--absolute {
@@ -441,7 +450,7 @@
   position: fixed;
   top: 32px;
   right: 32px;
-  z-index: 10002;
+  z-index: var(--z-toast);
   padding: 10px 16px;
   background: var(--bg-raised);
   border: none;

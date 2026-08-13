@@ -7,9 +7,13 @@
 package session
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +33,17 @@ type Backend struct {
 	Port         int
 	Hostname     string
 }
+
+// ErrCwdUnusable is returned by Create when an explicitly requested working
+// directory cannot be used. It lets the API layer surface a clear error to the
+// client instead of silently opening a shell in the default directory.
+var ErrCwdUnusable = errors.New("cwd not usable")
+
+// ErrCommandNotFound is returned by Create when an explicitly requested bare
+// command has no matching binary on PATH, so a missing program (e.g. "opencode")
+// fails loudly instead of spawning a shell that immediately exits with
+// "command not found".
+var ErrCommandNotFound = errors.New("command not found")
 
 // maxCarry bounds the carry buffer when the PTY emits an unterminated escape
 // sequence (e.g. ESC ] followed by binary with no BEL/ST): the parser stays
@@ -170,16 +185,35 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 
 		workingDir = m.cfg.Cwd
 		if cwd != "" {
-			if info, err := os.Stat(cwd); err == nil && info.IsDir() {
-				if real, err := filepath.EvalSymlinks(cwd); err == nil {
-					workingDir = real
-				}
+			info, statErr := os.Stat(cwd)
+			if statErr != nil {
+				return nil, fmt.Errorf("%w: %q: %v", ErrCwdUnusable, cwd, statErr)
+			}
+			if !info.IsDir() {
+				return nil, fmt.Errorf("%w: %q: not a directory", ErrCwdUnusable, cwd)
+			}
+			// EvalSymlinks is only normalization: a stat-valid cwd is never
+			// discarded, even if symlink resolution fails (e.g. FUSE mounts).
+			workingDir = cwd
+			if real, err := filepath.EvalSymlinks(cwd); err == nil {
+				workingDir = real
+			} else {
+				log.Printf("session: EvalSymlinks(%q): %v — using requested path", cwd, err)
+			}
+		}
+
+		// Bare commands are checked against PATH so a missing binary fails
+		// loudly. Compound commands (with spaces) and path-qualified commands
+		// are left to the shell.
+		if command != "" && !strings.ContainsAny(command, " \t/") {
+			if _, err := exec.LookPath(command); err != nil {
+				return nil, fmt.Errorf("%w: %q", ErrCommandNotFound, command)
 			}
 		}
 
 		cols = util.ClampInt(cols, 80, 1, 500)
 		rows = util.ClampInt(rows, 24, 1, 200)
-		env := buildShellEnv(m.cfg, shell)
+		env := buildShellEnv(m.cfg, shell, workingDir)
 		t, err := pty.Spawn(shell, args, env, workingDir, cols, rows)
 		if err != nil {
 			return nil, err
@@ -468,7 +502,7 @@ func (s *Session) GetSize() (int, int) {
 
 // --- helpers ---
 
-func buildShellEnv(cfg *config.Config, shell string) []string {
+func buildShellEnv(cfg *config.Config, shell, workingDir string) []string {
 	env := []string{
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
@@ -480,6 +514,6 @@ func buildShellEnv(cfg *config.Config, shell string) []string {
 			env = append(env, key+"="+val)
 		}
 	}
-	env = append(env, "PWD="+cfg.Cwd)
+	env = append(env, "PWD="+workingDir)
 	return env
 }

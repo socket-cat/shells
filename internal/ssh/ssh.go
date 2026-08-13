@@ -166,11 +166,12 @@ func Spawn(cfg *config.Config) func(backend *session.Backend, cols, rows int, co
 			fmt.Sprintf("%s@%s", backend.User, backend.Host),
 		)
 		if command != "" && cwd != "" {
-			args = append(args, remoteCommand(fmt.Sprintf("cd %s 2>/dev/null; %s%s", shellEscape(cwd), pathBootstrap, command)))
+			// cd failures exit loudly instead of silently dropping to $HOME.
+			args = append(args, remoteCommand(fmt.Sprintf("cd %s || exit 1; %s%s", shellEscape(cwd), pathBootstrap, command)))
 		} else if command != "" {
 			args = append(args, remoteCommand(pathBootstrap+command))
 		} else if cwd != "" {
-			args = append(args, remoteCommand(fmt.Sprintf("cd %s 2>/dev/null; exec $SHELL -l", shellEscape(cwd))))
+			args = append(args, remoteCommand(fmt.Sprintf("cd %s || exit 1; exec $SHELL -l", shellEscape(cwd))))
 		}
 		env := buildSSHEnv()
 		term, err := pty.Spawn("ssh", args, env, "", cols, rows)
