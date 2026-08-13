@@ -215,10 +215,19 @@ window._dispatchTerminalWheel = function(term, clientX, clientY, deltaY) {
   const target = term.element?.querySelector('.xterm-screen') || term.element;
   if (!target) return;
   const sc = window._getScaledCoords(term, clientX, clientY);
+  // A full-screen TUI that enables mouse tracking receives the wheel as a mouse
+  // report and scrolls with the opposite direction of the terminal's scrollback.
+  // Invert the delta so swipe up/down feels consistent with plain shells.
+  let d = deltaY;
+  try {
+    const mm = term.modes && term.modes.mouseTrackingMode;
+    if (mm && mm !== 'none') d = -deltaY;
+  } catch (_) {}
+  window.__dbg?.trace('wheel.dispatch', { sid: term._sid || '?', deltaY: Math.round(deltaY), inverted: d !== deltaY, mouse: (() => { try { return (term.modes && term.modes.mouseTrackingMode) || 'none'; } catch (_) { return '?'; } })() });
   target.dispatchEvent(new WheelEvent('wheel', {
     clientX: sc.clientX,
     clientY: sc.clientY,
-    deltaY,
+    deltaY: d,
     deltaMode: 0,
     bubbles: true,
     cancelable: true,
@@ -2193,10 +2202,10 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       });
     } else {
       requestAnimationFrame(() => {
-        if (session.term.cols !== cols || session.term.rows !== rows) {
-          window.__dbg?.trace('ptySize.resize', { sid, cols, rows });
-          try { session.term.resize(cols, rows); } catch (_) {}
-        }
+        // A non-active client must not resize its terminal to the active client's
+        // size: that reflows the whole scrollback every time the active role
+        // switches between devices (the observed scroll loop). Keep the local
+        // size and just scale the incoming frame down to fit this tile.
         this._applyScaling(session, sid, cols, rows);
       });
     }
@@ -2514,6 +2523,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       if (e.target && e.target.closest('#cmd-bar, #cmd-input, textarea, input, button, [contenteditable="true"]')) return;
       window._focusWithoutScroll(term);
       if (!this._isActiveClient.get(id)) {
+        window.__dbg?.trace('claim', { sid: String(id), reason: 'mousedown' });
         this._claimActiveIfNeeded(id, session, term, fitAddon);
       }
     });
@@ -2561,10 +2571,19 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     try {
       const webglAddon = new WebglAddon.WebglAddon();
-      webglAddon.onContextLoss(() => { try { webglAddon.dispose(); } catch (_) {} term._webglAddon = null; });
+      webglAddon.onContextLoss(() => {
+        try { webglAddon.dispose(); } catch (_) {}
+        term._webglAddon = null;
+        window.__dbg?.trace('renderer.contextloss', { sid: String(id) });
+      });
       term.loadAddon(webglAddon);
       term._webglAddon = webglAddon;
-    } catch (e) { console.log('[xterm] WebGL2 not available, using canvas renderer:', e.message); term._webglAddon = null; }
+      window.__dbg?.trace('renderer', { sid: String(id), type: 'webgl' });
+    } catch (e) {
+      console.log('[xterm] WebGL2 not available, using canvas renderer:', e.message);
+      term._webglAddon = null;
+      window.__dbg?.trace('renderer', { sid: String(id), type: 'canvas', reason: e.message });
+    }
 
     term.loadAddon(new Unicode11Addon.Unicode11Addon());
     term.unicode.activeVersion = '11';
@@ -2619,6 +2638,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         window._clearTouchSelection(term);
         this.setActive(id);
         if (!this._isActiveClient.get(id)) {
+          window.__dbg?.trace('claim', { sid: String(id), reason: 'touchstart' });
           this._claimActiveIfNeeded(id, session, term, fitAddon);
         }
         window.ShellSessions._scaleCoordSid = id;
@@ -2753,7 +2773,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     });
     ro.observe(body);
 
-    const session = { term, fitAddon, searchAddon, tile, cwd, ro, backendBadge: backendBadge || null, isAsleep: false, title: title || `shell #${id}`, _suppressBellUntil: Date.now() + 3000, _scaleFactor: 1.0, _cachedBodyRect: null, lastOutputAt: 0, _busy: false, _inRun: false, _runStart: 0, runPrintable: 0, lastInputAt: 0, _bellLatched: false, _fitSettle: null, _lastSentCols: null };
+    const session = { term, fitAddon, searchAddon, tile, cwd, ro, backendBadge: backendBadge || null, isAsleep: false, title: title || `shell #${id}`, _suppressBellUntil: Date.now() + 3000, _scaleFactor: 1.0, _cachedBodyRect: null, lastOutputAt: 0, _busy: false, _inRun: false, _runStart: 0, runPrintable: 0, lastInputAt: 0, _bellLatched: false, _fitSettle: null };
 
     term.onBell(() => {
       if (this._bellSuppressed || Date.now() < session._suppressBellUntil) return;
@@ -2783,15 +2803,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     term.onResize(({ cols, rows }) => {
       window.__dbg?.trace('term.onResize', { sid: String(id), cols, rows, isActive: this._isActiveClient.get(id) });
       if (this._isActiveClient.get(id) !== false) {
-        const colsChanged = cols !== session._lastSentCols;
-        // On mobile, a keyboard/URL-bar toggle changes only the row count; skip
-        // propagating it so the PTY (and a full-screen TUI) isn't SIGWINCH'd into
-        // clearing the scrollback on every toggle. A real reflow (cols change) is
-        // always propagated. Desktop keeps the existing behavior (always send).
-        if (colsChanged || !this._isMobile()) {
-          session._lastSentCols = cols;
-          this.sendWs({ type: 'resize', sid: id, cols, rows });
-        }
+        this.sendWs({ type: 'resize', sid: id, cols, rows });
       }
     });
     this.sessions.set(id, session);
@@ -2886,9 +2898,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       }
     }
     this.updateSleepState();
-    if (session && session.term && !this._isActiveClient.get(id)) {
-      this._claimActiveIfNeeded(id, session, session.term, session.fitAddon);
-    }
     this._ensureFullscreenMobile(id);
     if (session?.term) window._focusWithoutScroll(session.term);
   },
@@ -2987,15 +2996,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   },
 
   updateSleepState() {
-    if (this._isMobile()) {
-      for (const [sid, session] of this.sessions) {
-        if (session.isAsleep) {
-          session.isAsleep = false;
-          this.sendWs({ type: 'resume', sid });
-        }
-      }
-      return;
-    }
     const activeSession = this.activeId ? this.sessions.get(this.activeId) : null;
     const fullscreenSessionId = (activeSession && activeSession.tile.classList.contains('fullscreen')) ? this.activeId : null;
     for (const [sid, session] of this.sessions) {

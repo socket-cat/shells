@@ -121,16 +121,26 @@ func (t *Term) Resize(cols, rows int) error {
 	return setWinsize(t.master.Fd(), cols, rows)
 }
 
-// SignalWinch delivers SIGWINCH to the foreground process group of the PTY by
-// writing a winsize whose pixel fields differ, prompting full-screen TUIs
-// (vim, htop, …) to redraw their frame without a visible resize. (TIOCSIG
-// cannot be used: the Linux kernel only honours SIGINT/SIGQUIT/SIGTSTP there.)
+// SignalWinch delivers SIGWINCH to the foreground process group of the PTY and
+// forces a full TUI redraw by applying a transient row change: rows are bumped
+// by one and then restored to the exact original size, so diff-based full-screen
+// TUIs (pi/codex/opencode) detect a real resize and repaint their whole frame.
+// (TIOCSIG cannot be used: the Linux kernel only honours SIGINT/SIGQUIT/SIGTSTP
+// there.)
 func (t *Term) SignalWinch() error {
 	var ws winsize
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws))); errno != 0 {
 		return errno
 	}
-	ws.Xpixel ^= 1
+	// A diff-based full-screen TUI (pi/codex) only redraws its whole frame on a
+	// real size change; an Xpixel-only flip delivers SIGWINCH but leaves
+	// rows/cols unchanged and is ignored. Bump the row count and restore it so
+	// the foreground process detects a resize and repaints fully.
+	ws.Row++
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCSWINSZ), uintptr(unsafe.Pointer(&ws))); errno != 0 {
+		return errno
+	}
+	ws.Row--
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCSWINSZ), uintptr(unsafe.Pointer(&ws)))
 	if errno != 0 {
 		return errno

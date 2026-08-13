@@ -15,7 +15,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +31,16 @@ import (
 	"shells/internal/util"
 	"shells/internal/websocket"
 )
+
+// debugEnabled gates relay/resize diagnostics. Set SHELLS_DEBUG=1 to trace
+// claim-active, resize, and pty-size traffic.
+var debugEnabled = os.Getenv("SHELLS_DEBUG") != ""
+
+func debugf(format string, args ...any) {
+	if debugEnabled {
+		log.Printf("[dbg] "+format, args...)
+	}
+}
 
 const (
 	msgTypeData        byte = 0
@@ -271,35 +283,6 @@ func (h *Handler) broadcastPtySize(sid string, s *session.Session, exclude *webs
 	})
 }
 
-func (h *Handler) pickNewActiveClient(sid string, s *session.Session) {
-	found := false
-	h.forEachClient(func(cc *ClientConn) {
-		if found {
-			return
-		}
-		if !cc.ready.Load() {
-			return
-		}
-		cc.mu.Lock()
-		st, ok := cc.attached[sid]
-		cc.mu.Unlock()
-		if !ok {
-			return
-		}
-		cols := util.ClampInt(st.clientCols, 80, 1, 500)
-		rows := util.ClampInt(st.clientRows, 24, 1, 200)
-		_ = s.Term.Resize(cols, rows)
-		s.SetSize(cols, rows)
-		s.SetActiveWS(cc.ws)
-		h.broadcastPtySize(sid, s, nil)
-		found = true
-	})
-	// Only clear the active client if no ready, attached client remains.
-	if !found {
-		s.SetActiveWS(nil)
-	}
-}
-
 // --- connection lifecycle ---
 
 func (cc *ClientConn) onClose(code int, reason string) {
@@ -333,9 +316,7 @@ func (cc *ClientConn) cleanup() {
 			s.RemoveClient()
 			if s.GetActiveWS() == cc.ws {
 				s.SetActiveWS(nil)
-				if s.ClientCount() > 0 {
-					go cc.handler.pickNewActiveClient(sid, s)
-				}
+				debugf("active-cleared sid=%s", sid)
 			}
 		}
 	}
@@ -562,6 +543,7 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 
 	if isFirst {
 		s.SetActiveWS(cc.ws)
+		debugf("attach-first sid=%s", sid)
 	}
 
 	// Subscribe to PTY output.
@@ -630,14 +612,15 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		cc.sendEncrypted([]byte(modeStr), st.sidBuf)
 	}
 
-	// If the session is in the alternate screen, re-enter it on the client and
-	// force a full TUI redraw: the fresh-attach reset exits alt-screen and the
-	// replay only carries incremental diffs, so the static frame would
-	// otherwise be lost until the next resize. On resume the client already
-	// sits in the alternate screen, so only signal a winch to make the TUI
-	// redraw its full frame (the disconnect gap lost its diffs).
-	if s.InAlternateScreen() {
-		if !resume {
+	// Force the foreground program to redraw its full frame on a fresh attach:
+	// the replay only carries the ring's recent diffs, so a full-screen TUI —
+	// alternate-screen or inline (pi/codex style ESC[2J/H/3J) — would otherwise
+	// leave the client showing blank static regions with only the moving parts
+	// updating. SIGWINCH triggers the full redraw and is a no-op for a plain
+	// shell. Alternate-screen mode 1049 must additionally be re-entered on the
+	// client (the reset above exits it).
+	if !resume {
+		if s.InAlternateScreen() {
 			cc.sendEncrypted([]byte("\x1b[?1049h"), st.sidBuf)
 		}
 		_ = s.Term.SignalWinch()
@@ -847,6 +830,7 @@ func (cc *ClientConn) handleResize(sid string, msg map[string]any) {
 		r := util.ClampInt(rows, curRows, 1, 200)
 		_ = s.Term.Resize(c, r)
 		s.SetSize(c, r)
+		debugf("resize sid=%s cols=%d rows=%d", sid, c, r)
 		cc.handler.broadcastPtySize(sid, s, cc.ws)
 	}
 }
@@ -873,6 +857,7 @@ func (cc *ClientConn) handleClaimActive(sid string, msg map[string]any) {
 	r := util.ClampInt(rows, 24, 1, 200)
 	_ = s.Term.Resize(c, r)
 	s.SetSize(c, r)
+	debugf("claim-active sid=%s cols=%d rows=%d", sid, c, r)
 	cc.handler.broadcastPtySize(sid, s, cc.ws)
 }
 
