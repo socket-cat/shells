@@ -159,7 +159,6 @@
       const app = document.getElementById('app');
       if (!app) return false;
       const isKeyboardOpen = window.innerHeight - vv.height > 60;
-      window.__dbg?.trace('vv.syncAppPosition', { kb: isKeyboardOpen, vvW: vv.width, vvH: vv.height, vvTop: vv.offsetTop, iH: window.innerHeight });
       if (isKeyboardOpen) {
         app.style.position = 'fixed';
         app.style.top = vv.offsetTop + 'px';
@@ -178,21 +177,16 @@
 
     const refitAllTerms = () => {
       if (!window.ShellSessions || !window.ShellSessions.sessions) return;
-      let count = 0;
-      window.ShellSessions.sessions.forEach((session, sid) => {
+      window.ShellSessions.sessions.forEach((session) => {
         if (session && session.fitAddon && session.tile && session.tile.offsetWidth > 0) {
-          count++;
-          window.__dbg?.trace('fit.call', { sid: String(sid), source: 'viewport-refit' });
           try { session.fitAddon.fit(); } catch (_) {}
-          window.__dbg?.trace('fit.done', { sid: String(sid), source: 'viewport-refit' });
         }
       });
-      window.__dbg?.trace('vv.refitAllTerms', { count });
     };
 
     const doViewportUpdate = () => {
       const vv = window.visualViewport;
-      const kb = syncAppPosition();
+      syncAppPosition();
       const currentWidth = Math.round(vv.width);
       const currentHeight = Math.round(vv.height);
       const isFirstMeasure = lastVvWidth === null || lastVvHeight === null;
@@ -214,7 +208,6 @@
           refitSettle = setTimeout(() => {
             requestAnimationFrame(() => { refitAllTerms(); });
           }, 300);
-          window.__dbg?.trace('vv.resize', { w: currentWidth, h: currentHeight, dW: widthDelta, dH: heightDelta, first: isFirstMeasure, refit: true, kb });
         }
       }
     };
@@ -225,11 +218,9 @@
     };
 
     window.visualViewport.addEventListener('scroll', () => {
-      const kb = syncAppPosition();
-      window.__dbg?.trace('vv.scroll', { vvTop: window.visualViewport.offsetTop, kb });
+      syncAppPosition();
     });
     window.visualViewport.addEventListener('resize', () => {
-      window.__dbg?.trace('vv.event', { vvW: window.visualViewport.width, vvH: window.visualViewport.height });
       scheduleViewportUpdate();
     });
     doViewportUpdate();
@@ -247,17 +238,13 @@
       const isLandscape = window.innerWidth > window.innerHeight + 120;
       const mode = isLandscape ? 'columns' : 'rows';
       if (window.ShellSessions.layoutMode !== mode) {
-        const from = window.ShellSessions.layoutMode;
         window.ShellSessions.layoutMode = mode;
-        window.__dbg?.trace('layout.mobile', { from, to: mode, w: window.innerWidth, h: window.innerHeight });
         window.ShellLayout.updateGrid(window.ShellSessions.sessions, mode);
       }
     } else if (savedDesktopLayout) {
       const mode = savedDesktopLayout;
-      const from = window.ShellSessions.layoutMode;
       savedDesktopLayout = null;
       window.ShellSessions.layoutMode = mode;
-      window.__dbg?.trace('layout.desktop', { from, to: mode, w: window.innerWidth, h: window.innerHeight });
       // Leaving mobile: undo any forced fullscreen so tiles are not stuck
       // overlaying the desktop grid after a window resize.
       document.querySelectorAll('.shell-tile.fullscreen').forEach((t) => {

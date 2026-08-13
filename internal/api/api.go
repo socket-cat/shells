@@ -87,8 +87,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleHealth(w, r)
 	case path == "/api/errors" && r.Method == http.MethodPost:
 		h.handleErrors(w, r)
-	case path == "/api/dbg" && r.Method == http.MethodPost:
-		h.handleDbg(w, r)
 	case strings.HasPrefix(path, "/api/"):
 		h.handleEncrypted(w, r)
 	default:
@@ -130,30 +128,6 @@ func (h *Handler) handleErrors(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(204)
-}
-
-// handleDbg receives debug-stream batches from the client harness (see
-// public/js/debug.js). Dev-only: no-ops unless SHELLS_DEBUG is set, and even
-// then it only appends capped payloads to a local file. Intentionally
-// unauthenticated (like /api/errors) — the gate is the env var, so on a
-// production server (no SHELLS_DEBUG) this endpoint is a no-op.
-func (h *Handler) handleDbg(w http.ResponseWriter, r *http.Request) {
-	if os.Getenv("SHELLS_DEBUG") == "" {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 128<<10))
-	if err == nil && len(raw) > 0 {
-		f, ferr := os.OpenFile(filepath.Join(h.cfg.ServerKeyDir, "dbg-stream.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if ferr == nil {
-			_, werr := f.Write(append(raw, '\n'))
-			_ = f.Close()
-			if werr == nil {
-				log.Printf("[dbg-stream] batch bytes=%d", len(raw))
-			}
-		}
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- encrypted endpoints ---

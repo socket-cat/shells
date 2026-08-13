@@ -15,9 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,16 +29,6 @@ import (
 	"shells/internal/util"
 	"shells/internal/websocket"
 )
-
-// debugEnabled gates relay/resize diagnostics. Set SHELLS_DEBUG=1 to trace
-// claim-active, resize, and pty-size traffic.
-var debugEnabled = os.Getenv("SHELLS_DEBUG") != ""
-
-func debugf(format string, args ...any) {
-	if debugEnabled {
-		log.Printf("[dbg] "+format, args...)
-	}
-}
 
 const (
 	msgTypeData        byte = 0
@@ -316,7 +304,6 @@ func (cc *ClientConn) cleanup() {
 			s.RemoveClient()
 			if s.GetActiveWS() == cc.ws {
 				s.SetActiveWS(nil)
-				debugf("active-cleared sid=%s", sid)
 			}
 		}
 	}
@@ -543,7 +530,6 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 
 	if isFirst {
 		s.SetActiveWS(cc.ws)
-		debugf("attach-first sid=%s", sid)
 	}
 
 	// Subscribe to PTY output.
@@ -830,7 +816,6 @@ func (cc *ClientConn) handleResize(sid string, msg map[string]any) {
 		r := util.ClampInt(rows, curRows, 1, 200)
 		_ = s.Term.Resize(c, r)
 		s.SetSize(c, r)
-		debugf("resize sid=%s cols=%d rows=%d", sid, c, r)
 		cc.handler.broadcastPtySize(sid, s, cc.ws)
 	}
 }
@@ -857,7 +842,6 @@ func (cc *ClientConn) handleClaimActive(sid string, msg map[string]any) {
 	r := util.ClampInt(rows, 24, 1, 200)
 	_ = s.Term.Resize(c, r)
 	s.SetSize(c, r)
-	debugf("claim-active sid=%s cols=%d rows=%d", sid, c, r)
 	cc.handler.broadcastPtySize(sid, s, cc.ws)
 }
 

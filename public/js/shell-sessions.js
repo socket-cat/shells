@@ -223,7 +223,6 @@ window._dispatchTerminalWheel = function(term, clientX, clientY, deltaY) {
     const mm = term.modes && term.modes.mouseTrackingMode;
     if (mm && mm !== 'none') d = -deltaY;
   } catch (_) {}
-  window.__dbg?.trace('wheel.dispatch', { sid: term._sid || '?', deltaY: Math.round(deltaY), inverted: d !== deltaY, mouse: (() => { try { return (term.modes && term.modes.mouseTrackingMode) || 'none'; } catch (_) { return '?'; } })() });
   target.dispatchEvent(new WheelEvent('wheel', {
     clientX: sc.clientX,
     clientY: sc.clientY,
@@ -250,13 +249,11 @@ window._dispatchTerminalMouse = function(term, type, clientX, clientY, buttons) 
 
 window._focusWithoutScroll = function(term) {
   try {
-    window.__dbg?.trace('focus.start', { sid: term._sid || '?' });
     try {
       term.focus({ preventScroll: true });
     } catch (_) {
       term.focus();
     }
-    window.__dbg?.trace('focus.ok', { sid: term._sid || '?' });
   } catch (_) {
     try {
       term.focus({ preventScroll: true });
@@ -446,29 +443,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
                 const session = this.sessions.get(sid);
               if (session) {
                 const p = countPrintable(payload, RUN_MIN_CHARS);
-                window.__dbg?.trace('write.start', {
-                  sid,
-                  bytes: payload.length,
-                  printable: p,
-                  viewportY: session.term.buffer?.active?.viewportY,
-                  baseY: session.term.buffer?.active?.baseY,
-                  ydisp: session.term.buffer?.active?.ydisp,
-                  active: this.activeId === sid,
-                  head: payload.subarray(0, 48).length ? String.fromCharCode.apply(null, payload.subarray(0, 48)).replace(/[^\x20-\x7e]/g, (c) => '<' + c.charCodeAt(0).toString(16) + '>') : '',
-                });
                 if (p >= ARM_CHARS && Date.now() - (session.lastInputAt || 0) >= INPUT_IDLE_MS) {
                   session.lastOutputAt = Date.now();
                   session.runPrintable = Math.min(RUN_MIN_CHARS, session.runPrintable + p);
                 }
                 session.term.write(payload, () => {
                   if (this._pendingSwitcherSessions) this._checkAllReady();
-                  window.__dbg?.trace('write.done', {
-                    sid,
-                    viewportY: session.term.buffer?.active?.viewportY,
-                    baseY: session.term.buffer?.active?.baseY,
-                    cols: session.term.cols,
-                    rows: session.term.rows,
-                  });
                 });
               }
               }
@@ -684,7 +664,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
             if (inner.type === 'pty-size') {
               this._handlePtySize(inner.sid, inner.cols, inner.rows, inner.isActive);
             } else if (inner.type === 'reset') {
-              window.__dbg?.trace('term.reset', { sid: inner.sid, reason: 'server-reset', viewportY: session.term.buffer?.active?.viewportY, baseY: session.term.buffer?.active?.baseY });
               session.term.reset();
             } else if (inner.type === 'exit') {
               if (session.remotelyClosed) return;
@@ -784,10 +763,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         return true;
       }
       
-      if (msg.type === 'resize' || msg.type === 'available-size' || msg.type === 'claim-active' || msg.type === 'attach' || msg.type === 'detach' || msg.type === 'pause' || msg.type === 'resume') {
-        window.__dbg?.trace('sendWs', { type: msg.type, sid: msg.sid, cols: msg.cols, rows: msg.rows, wsReady: !!(this.ws && this.ws.readyState === 1 && this._wsReady) });
-      }
-
       this._sendQueue = this._sendQueue.then(async () => {
         try {
           const encrypted = await window.ShellsCrypto.encrypt(this.cryptoState, JSON.stringify(msg));
@@ -2159,9 +2134,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     session._scaleFactor = 1.0;
     requestAnimationFrame(() => {
       if (fitAddon) {
-        window.__dbg?.trace('fit.call', { sid: String(id), source: 'claim-active' });
         try { fitAddon.fit(); } catch (_) {}
-        window.__dbg?.trace('fit.done', { sid: String(id), source: 'claim-active' });
       }
     });
     if (!this._lastClaimActive) this._lastClaimActive = new Map();
@@ -2185,8 +2158,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       this._pendingPtySize.set(sid, { cols, rows, isActive });
       return;
     }
-    window.__dbg?.trace('ptySize.recv', { sid, cols, rows, isActive });
-
     this._ptySizes.set(sid, { cols, rows });
     this._isActiveClient.set(sid, !!isActive);
 
@@ -2195,9 +2166,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       session._scaleFactor = 1.0;
       requestAnimationFrame(() => {
         if (session.fitAddon) {
-          window.__dbg?.trace('fit.call', { sid: String(sid), source: 'pty-size-active' });
           try { session.fitAddon.fit(); } catch (_) {}
-          window.__dbg?.trace('fit.done', { sid: String(sid), source: 'pty-size-active' });
         }
       });
     } else {
@@ -2219,7 +2188,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     const dims = session.term._core?._renderService?.dimensions;
     if (!dims || dims.css.cell.width === 0 || dims.css.cell.height === 0) {
-      window.__dbg?.trace('applyScaling.retry', { sid, retryCount });
       setTimeout(() => this._applyScaling(session, sid, ptyCols, ptyRows, retryCount + 1), 100 * Math.pow(1.5, retryCount));
       return;
     }
@@ -2236,7 +2204,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       availableHeight / ptyPixelHeight,
       1.0
     );
-    window.__dbg?.trace('applyScaling', { sid, pty: ptyCols + 'x' + ptyRows, avail: availableWidth + 'x' + availableHeight, scale: scaleFactor });
 
     session._scaleFactor = scaleFactor;
     session._cachedBodyRect = null;
@@ -2335,7 +2302,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       e.preventDefault(); e.stopPropagation();
       this.setActive(sid);
       if (!this._isActiveClient.get(sid)) {
-        window.__dbg?.trace('claim', { sid: String(sid), reason: 'interceptor' });
         this._claimActiveIfNeeded(sid, session, session.term, session.fitAddon);
       }
       if (!dragging) {
@@ -2527,7 +2493,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       if (e.target && e.target.closest('#cmd-bar, #cmd-input, textarea, input, button, [contenteditable="true"]')) return;
       window._focusWithoutScroll(term);
       if (!this._isActiveClient.get(id)) {
-        window.__dbg?.trace('claim', { sid: String(id), reason: 'mousedown' });
         this._claimActiveIfNeeded(id, session, term, fitAddon);
       }
     });
@@ -2557,36 +2522,18 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(body);
-    term._sid = id;
-
-    const vpEl = term.element?.querySelector('.xterm-viewport');
-    if (vpEl) {
-      vpEl.addEventListener('scroll', () => {
-        window.__dbg?.trace('viewport.scroll', {
-          sid: String(id),
-          scrollTop: Math.round(vpEl.scrollTop),
-          clientHeight: vpEl.clientHeight,
-          scrollHeight: vpEl.scrollHeight,
-          viewportY: term.buffer?.active?.viewportY,
-          baseY: term.buffer?.active?.baseY,
-        });
-      }, { passive: true });
-    }
 
     try {
       const webglAddon = new WebglAddon.WebglAddon();
       webglAddon.onContextLoss(() => {
         try { webglAddon.dispose(); } catch (_) {}
         term._webglAddon = null;
-        window.__dbg?.trace('renderer.contextloss', { sid: String(id) });
       });
       term.loadAddon(webglAddon);
       term._webglAddon = webglAddon;
-      window.__dbg?.trace('renderer', { sid: String(id), type: 'webgl' });
     } catch (e) {
       console.log('[xterm] WebGL2 not available, using canvas renderer:', e.message);
       term._webglAddon = null;
-      window.__dbg?.trace('renderer', { sid: String(id), type: 'canvas', reason: e.message });
     }
 
     term.loadAddon(new Unicode11Addon.Unicode11Addon());
@@ -2642,7 +2589,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         window._clearTouchSelection(term);
         this.setActive(id);
         if (!this._isActiveClient.get(id)) {
-          window.__dbg?.trace('claim', { sid: String(id), reason: 'touchstart' });
           this._claimActiveIfNeeded(id, session, term, fitAddon);
         }
         window.ShellSessions._scaleCoordSid = id;
@@ -2737,9 +2683,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       const b = term.buffer && term.buffer.active;
       const vy = b ? b.viewportY : 0;
       const by = b ? b.baseY : 0;
-      window.__dbg?.trace('fit.call', { sid: String(id), source: 'ro-active' });
       try { fitAddon.fit(); } catch (_) {}
-      window.__dbg?.trace('fit.done', { sid: String(id), source: 'ro-active' });
       // A rows-only resize does not rewrap content: restore the viewport so the
       // user keeps seeing the same content (baseY unchanged proves no reflow).
       requestAnimationFrame(() => {
@@ -2753,7 +2697,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const ro = new ResizeObserver(() => {
       try {
         const isActive = this._isActiveClient.get(id);
-        window.__dbg?.trace('resizeObserver', { sid: String(id), isActive, bodyW: body.clientWidth, bodyH: body.clientHeight, termCols: term.cols, termRows: term.rows });
         if (isActive !== false) {
           clearTimeout(session._fitSettle);
           session._fitSettle = setTimeout(() => {
@@ -2805,7 +2748,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       this.sendWs({ type: 'data', sid: id, data });
     });
     term.onResize(({ cols, rows }) => {
-      window.__dbg?.trace('term.onResize', { sid: String(id), cols, rows, isActive: this._isActiveClient.get(id) });
       if (this._isActiveClient.get(id) !== false) {
         this.sendWs({ type: 'resize', sid: id, cols, rows });
       }
@@ -3062,9 +3004,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         try {
           s.term.options.fontSize = next;
           if (s.fitAddon) {
-            window.__dbg?.trace('fit.call', { sid: String(sid), source: 'font-size' });
             s.fitAddon.fit();
-            window.__dbg?.trace('fit.done', { sid: String(sid), source: 'font-size' });
           }
         } catch (_) {}
       }
@@ -3089,9 +3029,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           term.loadAddon(w);
           term._webglAddon = w;
           if (s.fitAddon) {
-            window.__dbg?.trace('fit.call', { sid: String(sid), source: 'webgl' });
             try { s.fitAddon.fit(); } catch (_) {}
-            window.__dbg?.trace('fit.done', { sid: String(sid), source: 'webgl' });
           }
           try { term.refresh(0, term.rows - 1); } catch (_) {}
         } catch (_) { term._webglAddon = null; }
