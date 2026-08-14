@@ -191,7 +191,6 @@ func VerifyHMACProof(msg []byte, proofB64 string) bool {
 type State struct {
 	sendAEAD     cipher.AEAD // s2c (server encrypts)
 	recvAEAD     cipher.AEAD // c2s (server decrypts)
-	apiAEAD      cipher.AEAD
 	apiKey       []byte
 	clientPub    []byte // 65-byte SEC1 point
 	challenge    string // hex challenge string for proof-response
@@ -243,7 +242,6 @@ func HandleInitCrypto(s *State, clientPubB64 string) (map[string]any, error) {
 	s.sendAEAD, _ = newGCM(hkdf(shared, salt, concatInfo(labelS2C, ctx[:]), keyLen)) // server sends with s2c
 	s.recvAEAD, _ = newGCM(hkdf(shared, salt, concatInfo(labelC2S, ctx[:]), keyLen)) // server receives c2s
 	apiRaw := hkdf(shared, salt, concatInfo(labelAPI, ctx[:]), keyLen)
-	s.apiAEAD, _ = newGCM(apiRaw)
 	s.apiKey = apiRaw
 	s.clientPub = clientPub
 

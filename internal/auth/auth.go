@@ -76,14 +76,6 @@ func (s *Store) APIKeyForToken(token string) []byte {
 	return e.apiKey
 }
 
-// HasSessionToken reports whether token is a currently active session token.
-func (s *Store) HasSessionToken(token string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.tokens[token]
-	return ok
-}
-
 // HasAllowedOrigin verifies that the request Origin (if present) matches the
 // serving host, preventing cross-site WebSocket / fetch hijacking. It is
 // reverse-proxy aware: when X-Forwarded-Host is present (set by nginx etc.)

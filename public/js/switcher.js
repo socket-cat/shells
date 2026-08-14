@@ -86,9 +86,8 @@ window.ShellSwitcher = {
     const credits = document.createElement('div');
     credits.className = 'switcher-credits';
     const ver = document.createElement('span');
-    // "Shells" is the fixed product identity (the app name above may be
-    // renamed); the version appears only here, so no duplication.
-    ver.textContent = 'Shells v' + (document.body.dataset.version || '');
+    // "Shells" is the fixed product identity (the app name above may be renamed).
+    ver.textContent = 'Shells v' + window.__APP_VERSION__;
     credits.appendChild(ver);
     const link = document.createElement('a');
     link.href = 'https://socket.cat';

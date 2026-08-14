@@ -57,7 +57,7 @@ window.ShellLayout = {
   },
 
   // Active/master highlighting — matches by tile.id === `tile-${id}`
-  updateActiveHighlight(activeId, masterId, sessionCount) {
+  updateActiveHighlight(activeId, masterId) {
     document.querySelectorAll('.shell-tile').forEach(t => {
       t.classList.remove('active', 'is-master');
       if (activeId && t.id === `tile-${activeId}`) t.classList.add('active');
@@ -74,10 +74,6 @@ window.ShellLayout = {
       { id: 'grid', label: 'Grid', desc: 'Tiled grid of terminals.' },
     ],
 
-    _modeById(id) {
-      return this.modes.find((m) => m.id === id) || null;
-    },
-
     open(triggerEl) {
       const currentId = window.ShellSessions.layoutMode || 'auto';
       const options = this.modes.map((m) => ({
@@ -88,7 +84,6 @@ window.ShellLayout = {
 
       window.TuiDialog.select('Choose layout', options, {
         current: currentId,
-        badgeText: 'Active',
         skipFilter: true,
         transparent: true,
         singleColumnNavigation: true,

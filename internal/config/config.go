@@ -60,7 +60,6 @@ type Config struct {
 	SecretSource          string
 	Salt                  []byte
 	SaltFile              string
-	SecretHash            []byte
 	OutputBufferMax       int
 	WSHWM                 int
 	WSLWM                 int
@@ -69,7 +68,6 @@ type Config struct {
 	ShellEnvKeys          []string
 	DefaultShell          string
 	AllowedShells         []string
-	SecureCookie          bool
 	// CheckOrigin, when true, enforces same-origin checks on WebSocket
 	// upgrades and API requests (honor X-Forwarded-Host when behind a proxy).
 	// Defaults to false so existing reverse-proxy deployments keep working.
@@ -124,7 +122,6 @@ func Load(version string) (*Config, error) {
 		WSCWM:                 WSCWM,
 		NonReplayableDecModes: NonReplayableDecModes,
 		ShellEnvKeys:          ShellEnvKeys,
-		SecureCookie:          os.Getenv("SHELLS_SECURE_COOKIE") == "true",
 		CheckOrigin:           os.Getenv("SHELLS_CHECK_ORIGIN") == "true",
 		TrustProxy:            os.Getenv("SHELLS_TRUST_PROXY") == "true",
 		Cwd:                   firstNonEmpty(os.Getenv("SHELLS_CWD"), homeDir()),
@@ -206,7 +203,6 @@ func Load(version string) (*Config, error) {
 	if err := crypto.Init([]byte(c.Secret), c.Salt, c.ServerKeyFile); err != nil {
 		return nil, fmt.Errorf("crypto init: %w", err)
 	}
-	c.SecretHash = crypto.SecretHash()
 
 	return c, nil
 }

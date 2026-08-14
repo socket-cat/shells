@@ -81,12 +81,6 @@
     const target = e.target;
     if (inExcludedTarget(target)) return;
 
-    const doSwipe = (dx, dy, onLeft, onRight) => {
-      if (Math.abs(dx) > 100 && Math.abs(dy) < 50) {
-        if (dx > 0) { onRight(); } else { onLeft(); }
-      }
-    };
-
     const doSwipe2 = (dx, dy) => {
       if (twoFingerFired) return;
       if (Math.abs(dx) > 60 && Math.abs(dy) < 80) {

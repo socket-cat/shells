@@ -343,7 +343,6 @@ window.ShellTheme = {
 
   async toggle(triggerEl) {
     await this.openPicker(triggerEl);
-    return this.currentTheme().id !== 'dark';
   },
 
   applyAccent(color, silent) {

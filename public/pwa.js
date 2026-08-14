@@ -35,6 +35,12 @@ if ('serviceWorker' in navigator) {
 // command in the command bar do we fall back to the Update/Later prompt (that
 // typed input would be lost on reload). Either way, the reload ends with a
 // non-blocking "Updated to vX.Y.Z" toast.
+// Shared unauthenticated health fetch (JSON body, or null when unreachable).
+const healthJson = () =>
+  fetch('/api/health', { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+
 (function () {
   if (!('serviceWorker' in navigator)) return;
 
@@ -71,15 +77,12 @@ if ('serviceWorker' in navigator) {
 
   // Live server version when it's a real bump (new != current), else null.
   const fetchVersions = () =>
-    fetch('/api/health', { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((h) => {
-        if (!h) return null;
-        const newV = String(h.version || '').replace(/^v/, '');
-        const oldV = document.body.dataset.version || '';
-        return newV && newV !== oldV ? { newV, oldV } : null;
-      })
-      .catch(() => null);
+    healthJson().then((h) => {
+      if (!h) return null;
+      const newV = String(h.version || '').replace(/^v/, '');
+      const oldV = window.__APP_VERSION__;
+      return newV && newV !== oldV ? { newV, oldV } : null;
+    });
 
   // Remember the version we're moving to, then release the waiting worker;
   // the controllerchange handler reloads.
@@ -168,10 +171,7 @@ window.pwaReloadAfterUpdate = async function pwaReloadAfterUpdate() {
   const up = await new Promise((resolve) => {
     let tries = 0;
     const tick = async () => {
-      try {
-        const r = await fetch('/api/health', { cache: 'no-store' });
-        if (r.ok) return resolve(true);
-      } catch (_) {}
+      if (await healthJson()) return resolve(true);
       tries += 1;
       if (tries >= 50) return resolve(false); // ~25s cap
       setTimeout(tick, 500);

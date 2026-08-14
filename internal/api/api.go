@@ -179,7 +179,7 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request, body map[string]
 	case path == "/api/ssh-connections":
 		h.handleSSHConnections(w, r, body, method)
 	case strings.HasPrefix(path, "/api/ssh-connections/"):
-		h.handleSSHConnectionDelete(w, body, path)
+		h.handleSSHConnectionDelete(w, path)
 	case path == "/api/ssh-probe":
 		h.handleSSHProbe(w, body, r)
 	case path == "/api/ssh-setup":
@@ -701,7 +701,7 @@ func (h *Handler) handleSSHConnections(w http.ResponseWriter, r *http.Request, b
 	util.SendJSON(w, 200, map[string]any{"success": true}, nil)
 }
 
-func (h *Handler) handleSSHConnectionDelete(w http.ResponseWriter, body map[string]any, path string) {
+func (h *Handler) handleSSHConnectionDelete(w http.ResponseWriter, path string) {
 	if !h.cfg.SSHAvailable {
 		util.SendJSON(w, 200, map[string]any{"error": "SSH not available on server"}, nil)
 		return

@@ -58,10 +58,9 @@ type ClientConn struct {
 	handler *Handler
 	cfg     *config.Config
 
-	state    *crypto.State
-	ready    atomic.Bool
-	clientIP string
-	token    string
+	state *crypto.State
+	ready atomic.Bool
+	token string
 
 	handshakeDone atomic.Bool // prevents crypto-ready replay
 
@@ -124,7 +123,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handler:  h,
 		cfg:      h.cfg,
 		state:    crypto.NewState(),
-		clientIP: util.ClientIP(r, h.cfg.TrustProxy),
 		attached: make(map[string]*attachState),
 	}
 
@@ -211,21 +209,6 @@ func (h *Handler) notifyDestroyed(id string) {
 		if attached {
 			cc.sendEncrypted(inner, nil)
 		}
-	})
-}
-
-func (h *Handler) broadcastToSession(sid string, message []byte, exclude *websocket.Conn) {
-	h.forEachClient(func(cc *ClientConn) {
-		if !cc.ready.Load() || cc.ws == exclude {
-			return
-		}
-		cc.mu.Lock()
-		st, ok := cc.attached[sid]
-		cc.mu.Unlock()
-		if !ok {
-			return
-		}
-		cc.sendEncrypted(message, st.sidBuf)
 	})
 }
 

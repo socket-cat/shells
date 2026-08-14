@@ -77,7 +77,7 @@ async function resolveSecretHash(saltHex) {
   if (loadScreen) loadScreen.style.display = '';
 
   if (!rawSecret || rawSecret.trim().length === 0) {
-    loadScreen.style.display = 'none';
+    if (loadScreen) loadScreen.style.display = 'none';
     rawSecret = await TuiDialog.prompt('Enter E2E Secret', {
       size: 'narrow',
       inputType: 'password',
@@ -196,19 +196,7 @@ window._clearTouchSelection = function(term) {
 window._getScaledCoords = function(term, clientX, clientY) {
   const sid = window.ShellSessions._scaleCoordSid;
   const session = sid && window.ShellSessions.sessions.get(sid);
-  const sf = session?._scaleFactor;
-  if (!sf || sf >= 1.0) return { clientX, clientY };
-  let rect = session._cachedBodyRect;
-  if (rect) session._cachedBodyRect = null;
-  if (!rect) {
-    const el = document.getElementById(`term-${sid}`);
-    if (el) rect = el.getBoundingClientRect();
-  }
-  if (!rect) return { clientX, clientY };
-  return {
-    clientX: rect.left + (clientX - rect.left) / sf,
-    clientY: rect.top + (clientY - rect.top) / sf,
-  };
+  return window.ShellSessions._scaledCoords(session, sid, clientX, clientY);
 };
 
 window._dispatchTerminalWheel = function(term, clientX, clientY, deltaY) {
@@ -249,17 +237,9 @@ window._dispatchTerminalMouse = function(term, type, clientX, clientY, buttons) 
 
 window._focusWithoutScroll = function(term) {
   try {
-    try {
-      term.focus({ preventScroll: true });
-    } catch (_) {
-      term.focus();
-    }
+    term.focus({ preventScroll: true });
   } catch (_) {
-    try {
-      term.focus({ preventScroll: true });
-    } catch (_) {
-      term.focus();
-    }
+    term.focus();
   }
 };
 
@@ -588,9 +568,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
               if (inner.type === 'auth-success') {
                 this._updateLoadStatus('authenticated, syncing...');
                 this._setLoadProgress(80);
-                document.cookie = 'shells-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT' + (location.protocol === 'https:' ? '; secure' : '');
-                var _secure = location.protocol === 'https:' ? '; secure' : '';
-                document.cookie = `shells-token=${inner.sessionToken}; path=/; samesite=strict` + _secure;
+                const secure = location.protocol === 'https:' ? '; secure' : '';
+                document.cookie = `shells-token=${inner.sessionToken}; path=/; samesite=strict` + secure;
 
                 this.sessionToken = inner.sessionToken;
                 this._wsReady = true;
@@ -815,9 +794,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       await Promise.all(destroyPromises);
 
       // If everything was wiped (e.g. server restart), create a fresh one
-      console.log(`[Sync] Server sessions: ${list.length}, Local sessions: ${this.sessions.size}`);
       if (this.sessions.size === 0) {
-        console.log('[Sync] No sessions, opening new shell dialog');
         const result = await this.promptCreate();
         if (!result && this.sessions.size === 0) this.showEmptyState();
         this._dismissLoadScreen();
@@ -1046,19 +1023,27 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     return c.port === 22 ? `${c.user}@${c.host}` : `${c.user}@${c.host}:${c.port}`;
   },
 
+  _splitPath(val, home) {
+    const parts = val.split('/');
+    const filter = parts.pop().toLowerCase();
+    const sub = parts.join('/');
+    if (val.startsWith('/')) {
+      const base = sub || '/';
+      return { base, filter, prefix: base === '/' ? '/' : base + '/' };
+    }
+    return {
+      base: sub ? `${home}/${sub}` : home,
+      filter,
+      prefix: sub ? sub + '/' : '',
+    };
+  },
+
   async _sshLsAutocomplete(val, backend, lsCache, recent, backendBadge) {
     if (!backend || !backend.connectionId) return [];
     const { connectionId } = backend;
+    if (!val.startsWith('/')) return [];
 
-    let base, filter, prefix;
-    if (val.startsWith('/')) {
-      const parts = val.split('/');
-      filter = parts.pop().toLowerCase();
-      base = parts.join('/') || '/';
-      prefix = base === '/' ? '/' : base + '/';
-    } else {
-      return [];
-    }
+    const { base, filter, prefix } = this._splitPath(val);
 
     const raw = lsCache.has(base) ? lsCache.get(base) : null;
     let folders;
@@ -1076,14 +1061,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     }
 
     const suggestions = [];
-    const seen = new Set();
 
     folders
       .filter(f => !filter || f.toLowerCase().startsWith(filter))
       .forEach(f => {
         const fullPath = prefix + f + '/';
         suggestions.push({ text: fullPath, canDelete: false, badge: [backendBadge, this._getBadgeInfo(fullPath)] });
-        seen.add(f);
       });
 
     if (recent) {
@@ -1175,16 +1158,18 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     else if (last.length === 1) text = (last[0] + last[0]).toUpperCase();
     else text = (last[0] + last[last.length - 1]).toUpperCase();
 
-    // Deterministic color
-    let hash = 0;
-    for (let i = 0; i < p.length; i++) {
-      hash = p.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const h = Math.abs(hash % 360);
-    // Use high saturation and light enough background for black text
-    const color = `hsl(${h}, 70%, 70%)`;
+    // Deterministic color (high saturation, light enough for black text)
+    const color = `hsl(${this._hashHue(p)}, 70%, 70%)`;
 
     return { text, color };
+  },
+
+  _hashHue(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return Math.abs(hash % 360);
   },
 
   _makeBadge(color, text, zeroMargin) {
@@ -1211,13 +1196,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     else text = (part[0] + part.slice(-1)).toUpperCase();
 
     const label = this._connLabel(conn);
-    let hash = 0;
-    for (let i = 0; i < label.length; i++) {
-        hash = label.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const h = Math.abs(hash % 360);
-
-    return { text, color: `hsl(${h}, 70%, 70%)` };
+    return { text, color: `hsl(${this._hashHue(label)}, 70%, 70%)` };
   },
 
   _getRemoteBadgeFromTitle(title) {
@@ -1570,19 +1549,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       : async (val) => {
       if (!val) return recent.map(p => ({ text: p, canDelete: true, badge: this._getBadgeInfo(p) }));
       
-      let base, filter, prefix;
-      if (val.startsWith('/')) {
-        const parts = val.split('/');
-        filter = parts.pop().toLowerCase();
-        base = parts.join('/') || '/';
-        prefix = base === '/' ? '/' : base + '/';
-      } else {
-        const parts = val.split('/');
-        filter = parts.pop().toLowerCase();
-        const sub = parts.join('/');
-        base = sub ? `${home}/${sub}` : home;
-        prefix = sub ? sub + '/' : '';
-      }
+      const { base, filter, prefix } = this._splitPath(val, home);
       
       const ls = await loadPath(base);
       const suggestions = [];
@@ -1984,8 +1951,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
       const { ok, data: list } = await this.encryptedFetch('/api/sessions', { _method: 'GET' });
       if (!ok) throw new Error('Failed to list sessions');
-      
-      console.log(`[Restore] Server reported ${list.length} sessions`);
 
       if (list.length === 0) {
         this._updateLoadStatus('waiting for path');
@@ -2106,7 +2071,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           <div class="load-bar"><div class="load-bar-fill" id="load-bar-fill"></div></div>
           <div id="load-status">connecting</div>
           <a id="load-force-reload" class="hidden" href="#" role="button">Stuck? Force reload</a>
-          <div class="load-sig">Shells v${document.body.dataset.version || ''} · <a href="https://socket.cat" target="_blank" rel="noopener">socket.cat</a></div>
+          ${this._versionSig('load-sig')}
         </div>
       `;
       document.body.appendChild(el);
@@ -2279,22 +2244,24 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     }
   },
 
-  _setupScaleInterceptor(interceptor, session, sid) {
-    const getAdjustedCoords = (clientX, clientY) => {
-      const sf = session._scaleFactor;
-      if (!sf || sf >= 1.0) return { clientX, clientY };
-      let rect = session._cachedBodyRect;
-      if (rect) session._cachedBodyRect = null;
-      if (!rect) {
-        const el = document.getElementById(`term-${sid}`);
-        if (el) rect = el.getBoundingClientRect();
-      }
-      if (!rect) return { clientX, clientY };
-      return {
-        clientX: rect.left + (clientX - rect.left) / sf,
-        clientY: rect.top + (clientY - rect.top) / sf,
-      };
+  _scaledCoords(session, sid, clientX, clientY) {
+    const sf = session?._scaleFactor;
+    if (!sf || sf >= 1.0) return { clientX, clientY };
+    let rect = session._cachedBodyRect;
+    if (rect) session._cachedBodyRect = null;
+    if (!rect) {
+      const el = document.getElementById(`term-${sid}`);
+      if (el) rect = el.getBoundingClientRect();
+    }
+    if (!rect) return { clientX, clientY };
+    return {
+      clientX: rect.left + (clientX - rect.left) / sf,
+      clientY: rect.top + (clientY - rect.top) / sf,
     };
+  },
+
+  _setupScaleInterceptor(interceptor, session, sid) {
+    const getAdjustedCoords = (clientX, clientY) => this._scaledCoords(session, sid, clientX, clientY);
 
     const getXtermTarget = () => session.term.element?.querySelector('.xterm-screen') || session.term.element;
 
@@ -2429,7 +2396,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
   mount(id, title, cwd, backendBadge) {
     if (this.sessions.has(id) || document.getElementById(`tile-${id}`)) {
-      console.log(`[Mount] Session ${id} already mounted, skipping.`);
       return;
     }
     this.sessions.set(id, { mounting: true, cwd, backendBadge: backendBadge || null });
@@ -2993,6 +2959,10 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     window.ShellLayout.updateGrid(this.sessions, this.layoutMode);
   },
 
+  _versionSig(cls) {
+    return `<div class="${cls}">Shells v${window.__APP_VERSION__} · <a href="https://socket.cat" target="_blank" rel="noopener">socket.cat</a></div>`;
+  },
+
   showEmptyState() {
     if (document.getElementById('empty-state')) return;
     if (this.sessions.size > 0) return;
@@ -3006,7 +2976,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       <button class="empty-new-btn empty-lock-btn" data-action="lock">Lock</button>
       <button class="empty-appearance-btn" data-action="toggle-theme" title="Appearance">◐ Appearance</button>
       <div class="empty-shortcut">alt+n</div>
-      <div class="empty-sig">Shells v${document.body.dataset.version || ''} · <a href="https://socket.cat" target="_blank" rel="noopener">socket.cat</a></div>
+      ${this._versionSig('empty-sig')}
     `;
     grid.appendChild(es);
     const emptyName = es.querySelector('.empty-app-name');

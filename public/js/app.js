@@ -17,6 +17,7 @@
  */
 
 window.__HOSTNAME__ = document.body.dataset.hostname;
+window.__APP_VERSION__ = document.body.dataset.version || '';
 
 // ── Global Shortcuts ──
 window.addEventListener('keydown', (e) => {

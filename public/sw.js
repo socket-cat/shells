@@ -126,6 +126,21 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Cache-First: serve from the SW cache when available, otherwise fetch and
+// backfill the cache. `ignoreSearch` strips the query string when matching
+// (static assets are versioned via ?v=, the HTML entry is not).
+const cacheFirst = (request, ignoreSearch = false) =>
+  caches.match(request, { ignoreSearch }).then((cached) => {
+    if (cached) return cached;
+    return fetch(request).then((networkResponse) => {
+      if (networkResponse && networkResponse.status === 200) {
+        const responseToCache = networkResponse.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, responseToCache));
+      }
+      return networkResponse;
+    });
+  });
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
@@ -139,44 +154,13 @@ self.addEventListener('fetch', (event) => {
   // assets makes the browser reject the assets.) Fresh HTML arrives once the
   // new SW activates, i.e. after the user applies the update.
   if (HTML_URLS.includes(url.pathname)) {
-    event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        return fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseToCache = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          }
-          return networkResponse;
-        });
-      })
-    );
+    event.respondWith(cacheFirst(event.request));
     return;
   }
   
   // Cache-First for static assets
   if (STATIC_ASSETS.includes(url.pathname)) {
-    event.respondWith(
-      caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        
-        return fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseToCache = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          }
-          return networkResponse;
-        });
-      })
-    );
+    event.respondWith(cacheFirst(event.request, true));
     return;
   }
   

@@ -435,13 +435,6 @@ func (s *Session) OutputSnapshot() [][]byte {
 	return s.outputBuffer.Snapshot()
 }
 
-// OutputBufferLen returns the number of chunks in the output buffer.
-func (s *Session) OutputBufferLen() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.outputBuffer.Len()
-}
-
 // AddClient increments and returns the client count.
 func (s *Session) AddClient() int {
 	s.mu.Lock()

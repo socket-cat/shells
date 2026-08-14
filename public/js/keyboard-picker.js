@@ -54,7 +54,6 @@ window.ShellKeyboard = {
   ],
 
   _seqIndex() {
-    if (this._shift && this._ctrl) return 2;
     if (this._ctrl) return 2;
     if (this._shift) return 1;
     return 0;
