@@ -1979,6 +1979,11 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       this._updateLoadStatus(`restoring ${list.length} sessions`);
       this._setLoadProgress(90);
 
+      // Sessions restored on this fresh page load are eligible to reclaim the
+      // active role (the device the user just opened the app on should rule
+      // the PTY dims). Claim only fires once per session, on the attach-ack
+      // pty-size, and only if another device currently holds active.
+      this._pendingClaimSids = new Set(list.map(s => s.id));
       for (const session of list) {
         if (!this.sessions.has(session.id)) {
           this.mount(session.id, session.title, session.cwd, session.isRemote ? this._getRemoteBadgeFromTitle(session.title) : null);
@@ -2129,14 +2134,16 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     }
   },
 
-  _claimActiveIfNeeded(id, session, term, fitAddon) {
+  _claimActiveIfNeeded(id) {
+    const session = this.sessions.get(id);
+    if (!session || !session.term || !session.fitAddon || this._isActiveClient.get(id)) return;
+    const term = session.term;
+    const fitAddon = session.fitAddon;
     this._isActiveClient.set(id, true);
     this._clearScalingStyles(id, term);
     session._scaleFactor = 1.0;
     requestAnimationFrame(() => {
-      if (fitAddon) {
-        try { fitAddon.fit(); } catch (_) {}
-      }
+      try { fitAddon.fit(); } catch (_) {}
     });
     if (!this._lastClaimActive) this._lastClaimActive = new Map();
     const now = Date.now();
@@ -2179,10 +2186,24 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         this._applyScaling(session, sid, cols, rows);
       });
     }
+
+    // Fresh-load reclaim: this pty-size is the attach-ack (the server sends it
+    // only once the client is attached), so it is safe to claim now. If another
+    // device holds the active role, take it over for this session.
+    if (this._pendingClaimSids && this._pendingClaimSids.has(sid)) {
+      this._pendingClaimSids.delete(sid);
+      if (!isActive) {
+        this._claimActiveIfNeeded(sid);
+      }
+    }
   },
 
   _applyScaling(session, sid, ptyCols, ptyRows, retryCount = 0) {
     if (retryCount > 10) return;
+    // Never scale an active tile: a fresh-load claim may have flipped this
+    // client to active after the rAF was queued, and scaling must not
+    // overwrite the cleared styles (guards the retry path too).
+    if (this._isActiveClient.get(sid)) return;
     const body = document.getElementById(`term-${sid}`);
     const xtermEl = session.term.element;
     if (!body || !xtermEl) return;
@@ -2304,9 +2325,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     interceptor.addEventListener('mousedown', (e) => {
       e.preventDefault(); e.stopPropagation();
       this.setActive(sid);
-      if (!this._isActiveClient.get(sid)) {
-        this._claimActiveIfNeeded(sid, session, session.term, session.fitAddon);
-      }
+      this._claimActiveIfNeeded(sid);
       if (!dragging) {
         dragging = true;
         document.addEventListener('mousemove', docMouseMove, true);
@@ -2372,6 +2391,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     this.sessions.delete(id);
     this._ptySizes.delete(id);
     this._isActiveClient.delete(id);
+    if (this._pendingClaimSids) this._pendingClaimSids.delete(id);
     if (this._lastClaimActive) this._lastClaimActive.delete(id);
     if (this.masterId === id) {
       const remaining = [...this.sessions.keys()];
@@ -2444,19 +2464,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     actions.className = 'tile-actions';
 
     const mobile = this._isMobile();
+    const isStandalone = window.isStandalonePWA ? window.isStandalonePWA() : false;
     const moreWrap = mobile ? document.createElement('span') : null;
     if (moreWrap) moreWrap.className = 'tile-more';
-    const more = (btn) => (moreWrap || actions).appendChild(btn);
 
-    actions.appendChild(switcherBtn);
-    const isStandalone = window.isStandalonePWA ? window.isStandalonePWA() : false;
-    if (!isStandalone) actions.appendChild(createBtn('Install app', 'install-pwa', null, window.Icons.download, 'install-btn'));
-    if (!mobile) actions.appendChild(createBtn('Promote to Master', 'promote-master', id, window.Icons.promote));
-    actions.appendChild(createBtn('New shell', 'new-shell', null, window.Icons.plus));
-    if (!mobile) actions.appendChild(createBtn('Cycle Layout', 'cycle-layout', null, window.Icons.layout));
-    if (mobile) actions.appendChild(createBtn('Keyboard', 'open-keyboard', id, window.Icons.keyboard));
-    if (mobile) {
-      const moreBtn = createBtn('More', 'toggle-overflow', null, window.Icons.overflow, 'tile-more-btn');
+    const moreBtn = mobile ? createBtn('More', 'toggle-overflow', null, window.Icons.overflow, 'tile-more-btn') : null;
+    if (moreBtn) {
       const onOutside = (e) => {
         if (!actions.contains(e.target)) {
           actions.classList.remove('more-open');
@@ -2468,16 +2481,40 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         actions.classList.add('more-open');
         setTimeout(() => document.addEventListener('click', onOutside, true), 0);
       });
-      actions.appendChild(moreBtn);
     }
-    more(createBtn('Choose Theme', 'toggle-theme', null, window.Icons.themeCircle));
-    more(createBtn('Smaller font', 'font-minus', null, '<span class="fs-a">A</span>'));
-    more(createBtn('Bigger font', 'font-plus', null, '<span class="fs-a fs-a--lg">A</span>'));
-    more(createBtn('Search', 'open-search', id, window.Icons.search));
-    more(createBtn('Fullscreen', 'toggle-fullscreen', id, window.Icons.maximize));
-    if (moreWrap) actions.appendChild(moreWrap);
-    actions.appendChild(createBtn('Close', 'destroy-shell', id, window.Icons.close));
-    actions.appendChild(createBtn('Lock', 'lock', null, window.Icons.lock));
+
+    actions.appendChild(switcherBtn);
+
+    const defs = [
+      { title: 'Install app', act: 'install-pwa', icon: window.Icons.download, cls: 'install-btn', unlessStandalone: true },
+      { title: 'Promote to Master', act: 'promote-master', icon: window.Icons.promote, sid: true, desktopOnly: true },
+      { title: 'New shell', act: 'new-shell', icon: window.Icons.plus },
+      { title: 'Cycle Layout', act: 'cycle-layout', icon: window.Icons.layout, desktopOnly: true },
+      { title: 'Keyboard', act: 'open-keyboard', icon: window.Icons.keyboard, sid: true, mobileOnly: true },
+      { title: 'Choose Theme', act: 'toggle-theme', icon: window.Icons.themeCircle, overflow: true },
+      { title: 'Smaller font', act: 'font-minus', icon: '<span class="fs-a">A</span>', overflow: true },
+      { title: 'Bigger font', act: 'font-plus', icon: '<span class="fs-a fs-a--lg">A</span>', overflow: true },
+      { title: 'Search', act: 'open-search', icon: window.Icons.search, sid: true, overflow: true },
+      { title: 'Fullscreen', act: 'toggle-fullscreen', icon: window.Icons.maximize, sid: true, overflow: true },
+      { title: 'Close', act: 'destroy-shell', icon: window.Icons.close, sid: true },
+      { title: 'Lock', act: 'lock', icon: window.Icons.lock },
+    ];
+
+    let firstOverflow = true;
+    for (const d of defs) {
+      if ((d.mobileOnly && !mobile) || (d.desktopOnly && mobile) || (d.unlessStandalone && isStandalone)) continue;
+      const btn = createBtn(d.title, d.act, d.sid ? id : null, d.icon, d.cls || '');
+      if (moreBtn && d.overflow) {
+        if (firstOverflow) {
+          firstOverflow = false;
+          actions.appendChild(moreBtn);
+          actions.appendChild(moreWrap);
+        }
+        moreWrap.appendChild(btn);
+      } else {
+        actions.appendChild(btn);
+      }
+    }
 
     header.appendChild(titleSpan);
     header.appendChild(actions);
@@ -2494,9 +2531,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       this.setActive(id);
       if (e.target && e.target.closest('#cmd-bar, #cmd-input, textarea, input, button, [contenteditable="true"]')) return;
       window._focusWithoutScroll(term);
-      if (!this._isActiveClient.get(id)) {
-        this._claimActiveIfNeeded(id, session, term, fitAddon);
-      }
+      this._claimActiveIfNeeded(id);
     });
     container.appendChild(tile);
     this._refreshFsTabs();
@@ -2590,9 +2625,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         e.preventDefault(); e.stopPropagation();
         window._clearTouchSelection(term);
         this.setActive(id);
-        if (!this._isActiveClient.get(id)) {
-          this._claimActiveIfNeeded(id, session, term, fitAddon);
-        }
+        this._claimActiveIfNeeded(id);
         window.ShellSessions._scaleCoordSid = id;
         const touch = e.touches[0];
         touchGesture.active = true; touchGesture.mode = 'tap';
@@ -2673,6 +2706,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         } else if (touchGesture.mode === 'horizontal' && Math.abs(dx) > 80 && Math.abs(dy) < 60) {
           if (this.sessions.size > 1) {
             if (dx > 0) this.previous(); else this.next();
+            this._claimActiveIfNeeded(this.activeId);
           }
           resetTouchGesture();
         } else {
