@@ -112,13 +112,20 @@ func main() {
 	log.Printf("State dir: %s", cfg.ServerKeyDir)
 	switch cfg.SecretSource {
 	case "generated":
-		log.Printf("E2E secret: %s (generated, saved to %s)", cfg.Secret, cfg.SecretFile)
+		log.Printf(`
+================================================================================
+ E2E secret (auto-generated on first launch — required to sign in to the app):
+
+   %s
+
+ Saved to %s — edit that file to change it.
+================================================================================`, cfg.Secret, cfg.SecretFile)
 	case "file":
-		log.Printf("E2E secret: (loaded from %s)", cfg.SecretFile)
+		log.Printf("E2E secret: (loaded from %s — edit that file to change it)", cfg.SecretFile)
 	case "env":
-		log.Printf("E2E secret: (from $SECRET env)")
+		log.Printf("E2E secret: (from $SECRET env; to persist instead, write it to %s)", cfg.SecretFile)
 	default:
-		log.Printf("E2E secret: (from %s)", cfg.SecretSource)
+		log.Printf("E2E secret: (from %s; secret file: %s)", cfg.SecretSource, cfg.SecretFile)
 	}
 
 	cors := func(next http.Handler) http.Handler {

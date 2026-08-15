@@ -140,6 +140,12 @@ func startChild(binary, logPath string) (*exec.Cmd, error) {
 			cmd.Stdout = f
 			cmd.Stderr = f
 		}
+	} else {
+		// No LOG: inherit the parent's stdio. (Leaving Stdout/Stderr nil
+		// would silence the child entirely — nil means /dev/null in os/exec,
+		// not inherit — losing startup output like the generated E2E secret.)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 	}
 	if devnull, err := os.Open(os.DevNull); err == nil {
 		cmd.Stdin = devnull
