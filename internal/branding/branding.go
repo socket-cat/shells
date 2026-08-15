@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"shells/internal/fsutil"
 )
 
 // State is the branding shown in the manifest, icon, and in-app UI.
@@ -88,9 +90,5 @@ func (s *Store) persist() error {
 	data, _ := json.MarshalIndent(s.st, "", "  ")
 	path := s.path
 	s.mu.RUnlock()
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fsutil.AtomicWrite(path, data)
 }

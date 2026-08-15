@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"shells/internal/fsutil"
 )
 
 const (
@@ -132,16 +134,8 @@ func loadOrCreateIdentity(keyFile string) error {
 	if err := os.MkdirAll(filepath.Dir(keyFile), 0o700); err != nil {
 		return err
 	}
-	tmp := keyFile + ".tmp"
 	out, _ := json.Marshal(rec)
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, keyFile); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return fsutil.AtomicWrite(keyFile, out)
 }
 
 // generateFingerprint mirrors the JS format: SHA-256(pubkey) hex upper,

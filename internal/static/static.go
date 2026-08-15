@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"shells/internal/branding"
+	"shells/internal/fsutil"
 	"shells/internal/icon"
 	"shells/internal/util"
 )
@@ -278,11 +279,7 @@ func (h *Handler) writeManifest(keyDir string) {
 	}
 	data, _ := json.MarshalIndent(manifest, "", "  ")
 	manifestPath := filepath.Join(keyDir, "extension-manifest.json")
-	tmpPath := manifestPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return
-	}
-	_ = os.Rename(tmpPath, manifestPath)
+	_ = fsutil.AtomicWrite(manifestPath, data)
 }
 
 // ServeHTTP serves a static asset.

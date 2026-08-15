@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"shells/internal/config"
+	"shells/internal/fsutil"
 	"shells/internal/pty"
 	"shells/internal/session"
 	"shells/internal/util"
@@ -99,12 +100,8 @@ func (m *Manager) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(m.cfg.SSHConnectionsFile), 0o700); err != nil {
 		return err
 	}
-	tmp := m.cfg.SSHConnectionsFile + ".tmp"
 	data, _ := json.MarshalIndent(m.connections, "", "  ")
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, m.cfg.SSHConnectionsFile)
+	return fsutil.AtomicWrite(m.cfg.SSHConnectionsFile, data)
 }
 
 // All returns a snapshot of all saved connections.
