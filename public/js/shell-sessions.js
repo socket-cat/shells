@@ -2454,6 +2454,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     if (!mobile) actions.appendChild(createBtn('Promote to Master', 'promote-master', id, window.Icons.promote));
     actions.appendChild(createBtn('New shell', 'new-shell', null, window.Icons.plus));
     if (!mobile) actions.appendChild(createBtn('Cycle Layout', 'cycle-layout', null, window.Icons.layout));
+    if (mobile) actions.appendChild(createBtn('Keyboard', 'open-keyboard', id, window.Icons.keyboard));
     if (mobile) {
       const moreBtn = createBtn('More', 'toggle-overflow', null, window.Icons.overflow, 'tile-more-btn');
       const onOutside = (e) => {
@@ -2473,7 +2474,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     more(createBtn('Smaller font', 'font-minus', null, '<span class="fs-a">A</span>'));
     more(createBtn('Bigger font', 'font-plus', null, '<span class="fs-a fs-a--lg">A</span>'));
     more(createBtn('Search', 'open-search', id, window.Icons.search));
-    if (mobile) more(createBtn('Keyboard', 'open-keyboard', id, window.Icons.keyboard));
     more(createBtn('Fullscreen', 'toggle-fullscreen', id, window.Icons.maximize));
     if (moreWrap) actions.appendChild(moreWrap);
     actions.appendChild(createBtn('Close', 'destroy-shell', id, window.Icons.close));
