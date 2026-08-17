@@ -17,6 +17,8 @@ chmod +x shells
 SECRET=your-secret PORT=2222 ./shells
 ```
 
+<p align="center"><img src="docs/demo.gif" alt="Shells demo — desktop and mobile" width="920"></p>
+
 The one-liner above works on **Linux, macOS, and FreeBSD** — it auto-detects your OS and CPU. Open `http://localhost:2222` and enter **`your-secret`** when the browser asks for the E2E secret — it's the `SECRET` you just set. Pick your own for real use; you'll type the same value in the browser to connect.
 
 Prebuilt for **linux / darwin / freebsd × amd64 / arm64**. See [releases](https://github.com/socket-cat/shells/releases/latest) for checksums and direct asset links.
