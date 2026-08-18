@@ -29,6 +29,7 @@ import (
 	"shells/internal/config"
 	"shells/internal/crypto"
 	"shells/internal/release"
+	"shells/internal/selftls"
 	"shells/internal/selfupdate"
 	"shells/internal/session"
 	"shells/internal/ssh"
@@ -108,7 +109,16 @@ func main() {
 	mux.Handle("/", staticH)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("Shells v%s listening on %s (token: %s...)", version, addr, cfg.AppToken[:8])
+	scheme := "http"
+	var certFile, keyFile string
+	if cfg.TLS {
+		scheme = "https"
+		certFile, keyFile, err = selftls.Load(cfg.ServerKeyDir)
+		if err != nil {
+			log.Fatalf("selftls: %v", err)
+		}
+	}
+	log.Printf("Shells v%s listening on %s://%s (token: %s...)", version, scheme, addr, cfg.AppToken[:8])
 	log.Printf("State dir: %s", cfg.ServerKeyDir)
 	switch cfg.SecretSource {
 	case "generated":
@@ -195,11 +205,17 @@ func main() {
 		crypto.Shutdown()
 	}()
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		if errors.Is(err, syscall.EADDRINUSE) {
+	var serveErr error
+	if cfg.TLS {
+		serveErr = server.ListenAndServeTLS(certFile, keyFile)
+	} else {
+		serveErr = server.ListenAndServe()
+	}
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		if errors.Is(serveErr, syscall.EADDRINUSE) {
 			log.Printf("port %d already in use — another instance is running", cfg.Port)
 			os.Exit(selfupdate.PortBusyCode) // supervisor stops cleanly, no crash-loop
 		}
-		log.Fatalf("server: %v", err)
+		log.Fatalf("server: %v", serveErr)
 	}
 }

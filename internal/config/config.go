@@ -73,6 +73,7 @@ type Config struct {
 	// Defaults to false so existing reverse-proxy deployments keep working.
 	CheckOrigin        bool
 	TrustProxy         bool
+	TLS                bool
 	Cwd                string
 	Version            string
 	ServerKeyDir       string
@@ -124,6 +125,7 @@ func Load(version string) (*Config, error) {
 		ShellEnvKeys:          ShellEnvKeys,
 		CheckOrigin:           os.Getenv("SHELLS_CHECK_ORIGIN") == "true",
 		TrustProxy:            os.Getenv("SHELLS_TRUST_PROXY") == "true",
+		TLS:                   EnvTrue(os.Getenv("SHELLS_TLS")),
 		Cwd:                   firstNonEmpty(os.Getenv("SHELLS_CWD"), homeDir()),
 		Version:               version,
 		Accent:                firstNonEmpty(os.Getenv("SHELLS_ACCENT"), "#fab283"),
@@ -231,6 +233,20 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// EnvTrue is the single shared parser for boolean env flags (SHELLS_TLS and
+// friends), used by both the server and the selfupdate supervisor — the two
+// must agree on what counts as enabled, or a flag like SHELLS_TLS=" on "
+// would make the child and its preflight probe disagree. It reports whether v
+// represents an enabled boolean flag: "1", "true", or "on" (case-insensitive,
+// surrounding whitespace tolerated). Anything else is false.
+func EnvTrue(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "on":
+		return true
+	}
+	return false
 }
 
 func firstNonEmpty(vals ...string) string {

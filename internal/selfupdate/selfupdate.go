@@ -17,6 +17,7 @@ package selfupdate
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"shells/internal/config"
 )
 
 // restartCode is the exit code the server uses to signal "a verified update is
@@ -247,8 +250,17 @@ func preflight(newBin string, testPort int, logPath string) bool {
 		_, _ = cmd.Process.Wait()
 	}()
 
+	scheme := "http"
 	client := &http.Client{Timeout: 2 * time.Second}
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/health", testPort)
+	if tlsEnabled() {
+		scheme = "https"
+		// Loopback-only preflight against the staged binary's self-signed
+		// cert, so certificate verification is intentionally skipped.
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	url := fmt.Sprintf("%s://127.0.0.1:%d/api/health", scheme, testPort)
 	for i := 0; i < 20; i++ {
 		resp, err := client.Get(url)
 		if err == nil {
@@ -311,6 +323,15 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// tlsEnabled reports whether the supervisor's own environment has SHELLS_TLS
+// on. It must parse identically to the child's parser (config.EnvTrue), since
+// the env is inherited by the staged child: if the preflight probe guessed a
+// different scheme than the staged child's listener, every update would fail
+// preflight and roll back forever.
+func tlsEnabled() bool {
+	return config.EnvTrue(os.Getenv("SHELLS_TLS"))
 }
 
 func envInt(k string, d int) int {
