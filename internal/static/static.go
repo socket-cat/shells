@@ -183,7 +183,7 @@ var generatedIcons = map[string]struct {
 	size int
 	bg   string
 }{
-	"/apple-touch-icon.png": {size: 180, bg: "#0a0a0a"},
+	"/apple-touch-icon.png": {size: 180, bg: ""},
 	"/icon-192.png":         {size: 192, bg: ""},
 	"/icon-512.png":         {size: 512, bg: ""},
 }
