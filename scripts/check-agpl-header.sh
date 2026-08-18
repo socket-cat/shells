@@ -7,15 +7,10 @@
 set -euo pipefail
 
 # Third-party / generated paths — never checked for a header.
+# public/vendor/ holds pristine upstream xterm.js builds (MIT) — see
+# public/vendor/THIRD-PARTY-NOTICES.md.
 EXCLUDED=(
-  "public/js/xterm.js"
-  "public/js/xterm-addon-fit.js"
-  "public/js/xterm-addon-webgl.js"
-  "public/js/xterm-addon-unicode11.js"
-  "public/js/xterm-addon-clipboard.js"
-  "public/js/xterm-addon-web-links.js"
-  "public/js/xterm-addon-search.js"
-  "public/css/xterm.css"
+  "public/vendor/"
   "public/fonts/"
   "dist/"
 )
