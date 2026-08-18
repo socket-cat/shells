@@ -31,17 +31,20 @@ import (
 )
 
 const (
-	msgTypeData        byte = 0
-	msgTypeControl     byte = 1
-	coalesceMs              = 8 * time.Millisecond
-	coalesceFlushBytes      = 32768
-	lockAllMinInterval      = 5 * time.Second
+	msgTypeData         byte = 0
+	msgTypeControl      byte = 1
+	coalesceMs               = 8 * time.Millisecond
+	coalesceFlushBytes       = 32768
+	lockAllMinInterval       = 5 * time.Second
+	activitySigInterval      = time.Second
 )
 
 // attachState holds the per-(client,session) relay state.
 type attachState struct {
 	isPaused      bool
 	isThrottled   bool
+	pausedBytes   int
+	lastActSig    time.Time
 	clientBuffer  *ringbuf.Buffer
 	coalesceBuf   []byte
 	coalesceTimer *time.Timer
@@ -50,6 +53,11 @@ type attachState struct {
 	sidBuf        []byte
 	cancelData    func()
 	cancelExit    func()
+}
+
+// activitySignalDue reports whether a paused-session activity heartbeat is due.
+func activitySignalDue(st *attachState, now time.Time) bool {
+	return st.lastActSig.IsZero() || now.Sub(st.lastActSig) >= activitySigInterval
 }
 
 // ClientConn is the per-WebSocket-connection state.
@@ -425,6 +433,8 @@ func (cc *ClientConn) handleEncryptedControl(msg map[string]any) {
 		cc.mu.Lock()
 		if st, ok := cc.attached[sid]; ok {
 			st.isPaused = false
+			st.pausedBytes = 0
+			st.lastActSig = time.Time{}
 		}
 		cc.mu.Unlock()
 		cc.flushClientBuffer(sid)
@@ -687,6 +697,15 @@ func (cc *ClientConn) onPtyData(sid string, data []byte) {
 
 	if st.isPaused || st.isThrottled {
 		st.clientBuffer.Push(data, len(data))
+		if st.isPaused {
+			st.pausedBytes += len(data)
+			if activitySignalDue(st, time.Now()) {
+				sig, _ := json.Marshal(map[string]any{"type": "activity", "sid": sid, "bytes": st.pausedBytes})
+				cc.sendEncrypted(sig, nil)
+				st.pausedBytes = 0
+				st.lastActSig = time.Now()
+			}
+		}
 		return
 	}
 

@@ -343,6 +343,17 @@
   white-space: nowrap;
 }
 
+.fs-tab--bell::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
 /* Fullscreen header: hide normal title/badge, show tab bar instead */
 .shell-tile.fullscreen .tile-header > .project-badge,
 .shell-tile.fullscreen .tile-header > .tile-bell-icon,

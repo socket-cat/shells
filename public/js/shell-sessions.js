@@ -422,11 +422,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
               if (this._wsReady) {
                 const session = this.sessions.get(sid);
               if (session) {
-                const p = countPrintable(payload, RUN_MIN_CHARS);
-                if (p >= ARM_CHARS && Date.now() - (session.lastInputAt || 0) >= INPUT_IDLE_MS) {
-                  session.lastOutputAt = Date.now();
-                  session.runPrintable = Math.min(RUN_MIN_CHARS, session.runPrintable + p);
-                }
+                this._noteOutput(session, countPrintable(payload, RUN_MIN_CHARS));
                 session.term.write(payload, () => {
                   if (this._pendingSwitcherSessions) this._checkAllReady();
                 });
@@ -644,6 +640,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
               this._handlePtySize(inner.sid, inner.cols, inner.rows, inner.isActive);
             } else if (inner.type === 'reset') {
               session.term.reset();
+            } else if (inner.type === 'activity') {
+              this._noteOutput(session, inner.bytes | 0);
             } else if (inner.type === 'exit') {
               if (session.remotelyClosed) return;
               this._showTuiStatus(inner.sid, `Process Exited (code ${inner.exitCode}) · Click to discard`, 'error');
@@ -1718,32 +1716,50 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   // accent bell icon latches on until the shell is activated (attention marker);
   // BELL_COOLDOWN_MS then mutes the session so a BEL stream can't beep-spam.
   // Output-only heuristic: silent commands (sleep, idle vim) read as idle.
+  // While a session is paused its output is buffered server-side and only
+  // rate-limited `activity` heartbeats arrive, so the run heuristic keeps
+  // tracking runs through the pause and can ring on real completion of a
+  // blurred terminal.
   _evalBusy() {
     const now = Date.now();
     const PULSE_MS = 1500;
-    const RUN_GRACE_MS = 5000;
+    const RUN_GRACE_MS = 9000;
     const MIN_RUN_MS = 10000;
+    const fsBar = document.querySelector('.fs-tab-bar');
     for (const [id, s] of this.sessions) {
       if (!s.term || !s.tile) continue;
       const pulsing = now - s.lastOutputAt < PULSE_MS;
       s._busy = pulsing;
       const showPulse = pulsing && id !== this.activeId;
       s.tile.classList.toggle('tile--busy', showPulse);
-      const card = document.querySelector(`.switcher-card[data-sid="${id}"]`);
+      const card = window.ShellSwitcher?.visible ? document.querySelector(`.switcher-card[data-sid="${id}"]`) : null;
       if (card) card.classList.toggle('switcher-card--busy', pulsing);
       s.tile.classList.toggle('tile--bell', s._bellLatched);
       if (card) card.classList.toggle('switcher-card--bell', s._bellLatched);
+      const fsTab = fsBar ? fsBar.querySelector(`.fs-tab[data-session-id="${id}"]`) : null;
+      if (fsTab) fsTab.classList.toggle('fs-tab--bell', s._bellLatched);
       const inRun = now - s.lastOutputAt < RUN_GRACE_MS;
       if (inRun && !s._inRun) { s._runStart = now; s.runPrintable = 0; }
-      if (s._inRun && !inRun && now - s._runStart >= MIN_RUN_MS && s.runPrintable >= RUN_MIN_CHARS && !this._bellSuppressed && now >= s._suppressBellUntil) {
-        if (id !== this.activeId) s._bellLatched = true;
-        s.tile.classList.add('bell-flash');
-        setTimeout(() => { s.tile.classList.remove('bell-flash'); }, 200);
-        if (typeof window.playBellSound === 'function') window.playBellSound();
-        s._suppressBellUntil = now + BELL_COOLDOWN_MS;
-      }
+      if (s._inRun && !inRun && now - s._runStart >= MIN_RUN_MS && s.runPrintable >= RUN_MIN_CHARS) this._ringBell(id, s);
       s._inRun = inRun;
     }
+  },
+
+  _noteOutput(session, count) {
+    if (count >= ARM_CHARS && Date.now() - (session.lastInputAt || 0) >= INPUT_IDLE_MS) {
+      session.lastOutputAt = Date.now();
+      session.runPrintable = Math.min(RUN_MIN_CHARS, session.runPrintable + count);
+    }
+  },
+
+  _ringBell(id, s) {
+    const now = Date.now();
+    if (this._bellSuppressed || now < s._suppressBellUntil) return;
+    if (id !== this.activeId) s._bellLatched = true;
+    s.tile.classList.add('bell-flash');
+    setTimeout(() => { s.tile.classList.remove('bell-flash'); }, 200);
+    if (typeof window.playBellSound === 'function') window.playBellSound();
+    s._suppressBellUntil = now + BELL_COOLDOWN_MS;
   },
 
   // ── Self-update check ──
@@ -2758,14 +2774,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     const session = { term, fitAddon, searchAddon, tile, cwd, ro, backendBadge: backendBadge || null, isAsleep: false, title: title || `shell #${id}`, _suppressBellUntil: Date.now() + 3000, _scaleFactor: 1.0, _cachedBodyRect: null, lastOutputAt: 0, _busy: false, _inRun: false, _runStart: 0, runPrintable: 0, lastInputAt: 0, _bellLatched: false, _fitSettle: null };
 
-    term.onBell(() => {
-      if (this._bellSuppressed || Date.now() < session._suppressBellUntil) return;
-      if (id !== this.activeId) session._bellLatched = true;
-      tile.classList.add('bell-flash');
-      setTimeout(() => { tile.classList.remove('bell-flash'); }, 200);
-      if (typeof window.playBellSound === 'function') window.playBellSound();
-      session._suppressBellUntil = Date.now() + BELL_COOLDOWN_MS;
-    });
+    term.onBell(() => this._ringBell(id, session));
 
     term.onTitleChange((t) => {
       const newTitle = t || `shell #${id}`;
@@ -2920,7 +2929,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     tabBar.innerHTML = '';
     for (const [sid, s] of this.sessions) {
       const tab = document.createElement('button');
-      tab.className = 'fs-tab' + (sid === this.activeId ? ' active' : '');
+      tab.className = 'fs-tab' + (sid === this.activeId ? ' active' : '') + (s._bellLatched ? ' fs-tab--bell' : '');
       tab.dataset.sessionId = sid;
 
       if (s.backendBadge) {

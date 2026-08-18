@@ -17,6 +17,9 @@
 .DS_Store
 Thumbs.db
 
+# TUI crash dumps (bubbletea apps write tea_debug.log to CWD)
+tea_debug.log
+
 # Build / test artifacts
 /tmp/
 /dist/
