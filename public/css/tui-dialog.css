@@ -520,3 +520,24 @@
   align-items: center;
   justify-content: center;
 }
+
+/* Opt-out checkbox row inside prompt dialogs */
+.tui-dialog-footer-extra {
+  padding: 0 32px;
+  margin-top: 10px;
+}
+
+.tui-dialog-footer-extra-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tui-dialog-footer-extra-check input[type="checkbox"] {
+  accent-color: var(--accent);
+}
