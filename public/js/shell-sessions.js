@@ -1123,7 +1123,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     this._scheduleUpdateCheck();
   },
 
-  _isMobile() {
+  isMobile() {
     return window.matchMedia('(max-width: 768px)').matches || ('ontouchstart' in window && window.innerWidth <= 768);
   },
 
@@ -1229,7 +1229,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const actions = document.createElement('div');
     actions.className = 'tile-actions';
 
-    const mobile = this._isMobile();
+    const mobile = this.isMobile();
     const isStandalone = window.isStandalonePWA ? window.isStandalonePWA() : false;
     const moreWrap = mobile ? document.createElement('span') : null;
     if (moreWrap) moreWrap.className = 'tile-more';
@@ -1309,7 +1309,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       fontFamily: "'Fira Code', monospace",
       fontLigatures: true,
       // mobile gets a lighter scrollback so resizes don't re-wrap a huge buffer (the full 5000 stays on desktop)
-      scrollback: this._isMobile() ? 1500 : 5000,
+      scrollback: this.isMobile() ? 1500 : 5000,
       theme: (window.ShellTheme && window.ShellTheme.xtermTheme) || window.darkTheme || { background: '#000000' },
       allowTransparency: false,
       allowProposedApi: true,
@@ -1357,7 +1357,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     body.appendChild(gestureLayer);
 
       let _realFocus = null;
-      if (this._isMobile()) {
+      if (this.isMobile()) {
         const textarea = term.element?.querySelector('textarea.xterm-helper-textarea');
         if (textarea) {
           textarea.setAttribute('autocapitalize', 'none');
@@ -1582,7 +1582,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     window.ShellLayout.updateActiveHighlight(this.activeId, this.masterId);
     const cmdBar = document.getElementById('cmd-bar');
     if (cmdBar) {
-      if (this._isMobile() && this._wsReady) {
+      if (this.isMobile() && this._wsReady) {
         cmdBar.style.display = '';
         const tile = id ? document.getElementById(`tile-${id}`) : null;
         if (tile) tile.appendChild(cmdBar); else document.getElementById('app').appendChild(cmdBar);
@@ -1633,7 +1633,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   },
 
   _ensureFullscreenMobile(id) {
-    if (!this._isMobile() || this.sessions.size <= 1) return;
+    if (!this.isMobile() || this.sessions.size <= 1) return;
     const target = id || this.activeId;
     const session = this.sessions.get(target);
     if (!session || !session.tile) return;

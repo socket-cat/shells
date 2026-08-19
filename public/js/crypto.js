@@ -71,6 +71,7 @@ window.ShellsCrypto = (function () {
     return new Uint8Array(bits);
   }
 
+  // Intentionally NOT shared with shell-sessions' hexToUint8Array: this strips dashes and truncates to 16 bytes (SID-specific); that one is a general arbitrary-length parser feeding 32-byte key material.
   function sidToBuffer(sid) {
     if (!sid) return new Uint8Array(16);
     const hex = sid.replace(/-/g, '');

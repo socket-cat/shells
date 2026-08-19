@@ -183,7 +183,7 @@ window.ShellSwitcher = {
       card.addEventListener('click', () => {
         window.ShellSessions.setActive(id);
         this.hide();
-        if (window.ShellSessions._isMobile()) {
+        if (window.ShellSessions.isMobile()) {
           const tile = window.ShellSessions.sessions.get(id)?.tile;
           // The active tile is usually already fullscreen via
           // _ensureFullscreenMobile; only force it when it is not (single

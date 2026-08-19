@@ -52,6 +52,7 @@ window.addEventListener('keydown', (e) => {
     const session = ss && ss.activeId ? ss.sessions.get(ss.activeId) : null;
     if (session && session.searchAddon) {
       const ae = document.activeElement;
+      // Intentionally NOT TuiDialog.isEditableTarget: this variant must treat the xterm helper textarea as pass-through (Ctrl+F in terminal) and ignores contentEditable.
       const inInput = !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA'));
       const isTerminalInput = inInput && ae.classList && ae.classList.contains('xterm-helper-textarea');
       if (!inInput || isTerminalInput) {

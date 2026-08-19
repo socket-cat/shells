@@ -91,7 +91,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     this._pendingSwitcherSessions = null;
     clearTimeout(this._switcherFallbackTimer);
     this._dismissLoadScreen();
-    if (this._isMobile() && window.ShellLayout?.switcher && this.sessions.size > 1) {
+    if (this.isMobile() && window.ShellLayout?.switcher && this.sessions.size > 1) {
       setTimeout(() => window.ShellLayout.switcher.show(), 200);
     }
   },
