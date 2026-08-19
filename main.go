@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
 	"errors"
 	"fmt"
@@ -165,7 +166,9 @@ func main() {
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("X-Frame-Options", "DENY")
 			h.Set("Referrer-Policy", "no-referrer")
-			// HSTS is owned by the TLS-terminating reverse proxy (e.g. nginx) to avoid duplicate headers.
+			// HSTS is intentionally not set here: TLS is normally terminated by
+			// the reverse proxy, which owns the HSTS header. The app's plain
+			// listener (the common proxy mode) never sends it.
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -185,9 +188,23 @@ func main() {
 		})
 	}
 
+	// TLS hardening toward SSL Labs A+: minimum TLS 1.2, and an explicit
+	// strong-only TLS 1.2 cipher set (ECDHE-ECDSA with AEAD). TLS 1.3 suites,
+	// forward secrecy curves and HTTP/2 are Go defaults. The cert is ECDSA
+	// (selftls uses P-256), so ECDSA suites only.
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+		},
+	}
+
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           securityHeaders(cors(recovery(mux))),
+		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second, // headers only; does not cap long-lived WS
 		IdleTimeout:       120 * time.Second,
 	}
