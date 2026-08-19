@@ -981,7 +981,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   },
 
   _sshConnections: [],
-  _isDeletingConn: new Set(),
 
   async fetchSshConnections() {
     try {
