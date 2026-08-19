@@ -66,6 +66,10 @@ window.ShellSwitcher = {
     cards.className = 'switcher-cards';
 
     // Brand header: [logo + app name] top-left, [version + socket.cat] top-right.
+    // Documented exception (internal standards): pattern-similar to TuiDialog's
+    // _createBrandBar but a visually distinct component (different DOM shape
+    // + stylesheet); unifying is deferred until visual-regression tooling
+    // exists.
     const brand = document.createElement('div');
     brand.className = 'switcher-brand';
 

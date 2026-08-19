@@ -20,6 +20,11 @@
 // ShellSwitcher moved to window.ShellSwitcher in switcher.js
 
 // ── Swipe navigation for mobile ──
+// Documented exception (internal standards): this two-finger tracker is the third of
+// three pattern-similar gesture implementations (switcher.js,
+// keyboard-picker.js, here). They diverge deliberately (directions,
+// thresholds, excluded targets, touchcancel); unify only behind touch-QC
+// coverage.
 (function() {
   let touchStartX = 0;
   let touchStartY = 0;

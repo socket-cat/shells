@@ -17,6 +17,11 @@
  */
 
 // ── Shell Session Management ──
+// Documented exception (internal standards): 1,900+ lines, above the 500 soft budget.
+// The remaining concern is one strongly-connected core (WS lifecycle +
+// dispatch + mount + navigation + lifecycle) whose pieces pass raw session
+// state between them; further splitting along those seams needs an internal
+// event/callback layer first.
 
 function hexToUint8Array(hex) {
   const bytes = new Uint8Array(hex.length / 2);
