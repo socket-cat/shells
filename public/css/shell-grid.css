@@ -41,10 +41,6 @@
   overflow: hidden;
 }
 
-.shell-tile {
-  order: 2; /* All tiles default to stack */
-}
-
 /* Master-Stack (Auto) — implicit rows like grid/columns layouts */
 #shell-grid[data-layout-mode="auto"] {
   grid-auto-rows: 1fr;
@@ -222,6 +218,7 @@
 
 /* ── Shell tile ── */
 .shell-tile {
+  order: 2; /* All tiles default to stack; is-master rules above raise it via specificity */
   background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: 0;
