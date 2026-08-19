@@ -40,6 +40,7 @@ const STATIC_ASSETS = [
   '/js/crypto.js',
   '/js/shell-sessions.js',
   '/js/shell/recents.js',
+  '/js/shell/update.js',
   '/js/theme.js',
   '/js/theme-templates.js',
   '/js/grid-resizer.js',
