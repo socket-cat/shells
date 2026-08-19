@@ -39,6 +39,7 @@ const STATIC_ASSETS = [
   '/js/tui-dialog.js',
   '/js/crypto.js',
   '/js/shell-sessions.js',
+  '/js/shell/recents.js',
   '/js/theme.js',
   '/js/theme-templates.js',
   '/js/grid-resizer.js',
