@@ -116,22 +116,6 @@
   accent-color: var(--accent);
 }
 
-/* Manual check button in the switcher footer */
-.switcher-update-check {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 2px 10px;
-  cursor: pointer;
-}
-
-.switcher-update-check:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
 /* Install Button */
 .install-btn {
   font-size: 12px !important;

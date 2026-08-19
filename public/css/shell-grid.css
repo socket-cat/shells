@@ -535,8 +535,7 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-.shell-tile.tile--busy .project-badge,
-.switcher-card.switcher-card--busy .project-badge {
+.shell-tile.tile--busy .project-badge {
   animation: shells-badge-pulse 1.4s ease-in-out infinite;
 }
 

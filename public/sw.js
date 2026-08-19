@@ -30,6 +30,7 @@ const STATIC_ASSETS = [
   '/css/load-screen.css',
   '/css/shell-grid.css',
   '/css/mobile.css',
+  '/css/switcher.css',
   '/css/components.css',
   '/css/tui-dialog.css',
   '/js/app.js',
