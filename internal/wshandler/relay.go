@@ -3,8 +3,7 @@
 
 // PTY data relay: the byte path from session PTYs to attached clients —
 // replay on attach, coalescing, pause/resume buffering with rate-limited
-// activity heartbeats, and WS backpressure. Extracted from wshandler.go
-//.
+// activity heartbeats, and WS backpressure. Extracted from wshandler.go.
 package wshandler
 
 import (
