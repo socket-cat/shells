@@ -162,23 +162,7 @@ document.getElementById('shell-grid').addEventListener('click', (e) => {
     const tile = destroyBtn.closest('.shell-tile');
     const titleText = tile.querySelector('.tile-title')?.textContent || 'this shell';
     
-    const message = document.createElement('div');
-    message.style.lineHeight = '1.4';
-    message.appendChild(document.createTextNode('Permanently destroy:'));
-    message.appendChild(document.createElement('br'));
-    const strong = document.createElement('strong');
-    strong.style.color = 'var(--text)';
-    strong.textContent = titleText;
-    message.appendChild(strong);
-    message.appendChild(document.createTextNode('?'));
-
-    TuiDialog.confirm('Destroy Shell', message, {
-      dangerous: true,
-      confirmText: 'Yes, destroy',
-      parent: tile,
-      size: 'small',
-      onConfirm: () => { window.ShellSessions.destroy(shellId); },
-    });
+    TuiDialog.confirmDestroy(shellId, titleText, tile);
     return;
   }
 });

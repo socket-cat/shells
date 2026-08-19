@@ -135,22 +135,7 @@ window.ShellSwitcher = {
           const shellId = String(id);
           const titleText = tileTitle ? tileTitle.textContent : `shell #${shellId}`;
           
-          const message = document.createElement('div');
-          message.style.lineHeight = '1.4';
-          message.appendChild(document.createTextNode('Permanently destroy:'));
-          message.appendChild(document.createElement('br'));
-          const strong = document.createElement('strong');
-          strong.style.color = 'var(--text)';
-          strong.textContent = titleText;
-          message.appendChild(strong);
-          message.appendChild(document.createTextNode('?'));
-
-          TuiDialog.confirm('Destroy Shell', message, {
-            dangerous: true,
-            confirmText: 'Yes, destroy',
-            size: 'small',
-            onConfirm: () => { window.ShellSessions.destroy(shellId); },
-          });
+          window.TuiDialog.confirmDestroy(shellId, titleText);
         }, 220);
       });
 
