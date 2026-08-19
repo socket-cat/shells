@@ -1,0 +1,87 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* ── In-terminal search bar ── */
+.term-search-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  box-sizing: border-box;
+}
+
+.term-search-bar input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  box-sizing: border-box;
+}
+
+.term-search-bar input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.term-search-bar button {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.term-search-bar button:hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+.term-search-bar .tsb-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.term-search-bar .tsb-count {
+  color: var(--text-muted);
+  font-size: 10px;
+  min-width: 44px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.term-search-bar .tsb-close {
+  color: var(--text-muted);
+  font-size: 14px;
+}

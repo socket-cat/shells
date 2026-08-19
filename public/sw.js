@@ -29,6 +29,8 @@ const STATIC_ASSETS = [
   '/css/base.css',
   '/css/load-screen.css',
   '/css/shell-grid.css',
+  '/css/search.css',
+  '/css/status-bar.css',
   '/css/mobile.css',
   '/css/switcher.css',
   '/css/command-bar.css',

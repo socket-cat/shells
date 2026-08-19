@@ -1,0 +1,59 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* ── TUI status bar (dead session banner) ── */
+.tui-status-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 32px; /* Slightly taller for easier clicking on mobile */
+  line-height: 32px;
+  background: #000;
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 0 12px;
+  z-index: 2000; /* Higher than cmd-bar (1000) and other UI elements */
+  display: flex;
+  align-items: center;
+  pointer-events: auto;
+  cursor: pointer;
+  border-top: 1px solid var(--border-subtle);
+  animation: tui-slide-up 0.2s ease-out;
+  transition: filter 0.1s ease-in-out;
+}
+
+.tui-status-bar:hover {
+  filter: brightness(1.2);
+}
+
+.tui-status-bar.error {
+  background: #800;
+  color: #fff;
+}
+
+.tui-status-bar.info {
+  background: #005f87;
+  color: #fff;
+}
+
+@keyframes tui-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
