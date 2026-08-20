@@ -183,6 +183,9 @@ func (m *Manager) Probe(host, user string, port int) (*ProbeResult, error) {
 
 // ProbeWithKey checks if our installed key works for the connection.
 func (m *Manager) ProbeWithKey(connID, host, user string, port int) (string, bool) {
+	if err := ValidateConnectionID(connID); err != nil {
+		return "", false
+	}
 	keyPath := filepath.Join(m.cfg.SSHKeysDir, connID)
 	if _, err := os.Stat(keyPath); err != nil {
 		return "", false
@@ -214,6 +217,9 @@ func (m *Manager) ProbeWithKey(connID, host, user string, port int) (string, boo
 // SetupKey installs our public key on the remote host using a password.
 // It spawns ssh in a PTY, detects the password prompt, and feeds the password.
 func (m *Manager) SetupKey(connID, host, user string, port int, password string) error {
+	if err := ValidateConnectionID(connID); err != nil {
+		return err
+	}
 	if err := GenerateKeyPair(m.cfg.SSHKeysDir, connID); err != nil {
 		return &SetupError{Code: "install_failed", Msg: "Key generation failed"}
 	}
