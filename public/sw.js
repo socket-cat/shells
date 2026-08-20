@@ -41,6 +41,7 @@ const STATIC_ASSETS = [
   '/js/icons.js',
   '/js/audio.js',
   '/js/tui-dialog.js',
+  '/js/tui-dialog/dom.js',
   '/js/crypto.js',
   '/js/shell-sessions.js',
   '/js/shell/recents.js',
