@@ -85,6 +85,7 @@ func main() {
 	sshMgr := ssh.NewManager(cfg)
 	if cfg.SSHAvailable {
 		mgr.SpawnSSH = ssh.Spawn(cfg)
+		mgr.SSHValidate = sshMgr.Validate()
 	}
 
 	wsH := wshandler.New(cfg, mgr, authStore)

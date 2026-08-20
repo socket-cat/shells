@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"shells/internal/config"
+	"shells/internal/pty"
 )
 
 func testConfig(t *testing.T) *config.Config {
@@ -124,4 +125,79 @@ func TestBuildShellEnvPWD(t *testing.T) {
 		}
 	}
 	t.Fatal("PWD not set to the working directory")
+}
+
+// sshTestManager returns a Manager wired with a fake SpawnSSH (returns
+// "fake spawn reached") and the given SSHValidate result. It proves whether
+// validation blocks before spawn: a blocked create returns the typed error,
+// a passing create returns the fake spawn error.
+func sshTestManager(t *testing.T, res ValidateResult) *Manager {
+	t.Helper()
+	m, err := New(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SSHValidate = func(backend *Backend, command, cwd string) (ValidateResult, error) {
+		return res, nil
+	}
+	m.SpawnSSH = func(backend *Backend, cols, rows int, command, cwd string) (*pty.Term, string, string, error) {
+		return nil, "", "", errors.New("fake spawn reached")
+	}
+	return m
+}
+
+func sshBackend() *Backend {
+	return &Backend{
+		Type:         "ssh",
+		ConnectionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Host:         "h",
+		User:         "u",
+		Port:         22,
+	}
+}
+
+func TestCreateSSHCwdBadFailsLoud(t *testing.T) {
+	m := sshTestManager(t, ValidateCwdBad)
+	_, err := m.Create(80, 24, "", "/nonexistent-xyz", sshBackend())
+	if !errors.Is(err, ErrCwdUnusable) {
+		t.Fatalf("expected ErrCwdUnusable, got %v", err)
+	}
+	if m.Count() != 0 {
+		t.Fatalf("session created despite unusable remote cwd: count=%d", m.Count())
+	}
+}
+
+func TestCreateSSHCmdBadFailsLoud(t *testing.T) {
+	m := sshTestManager(t, ValidateCmdBad)
+	_, err := m.Create(80, 24, "definitely-not-a-binary-xyz", "", sshBackend())
+	if !errors.Is(err, ErrCommandNotFound) {
+		t.Fatalf("expected ErrCommandNotFound, got %v", err)
+	}
+	if m.Count() != 0 {
+		t.Fatalf("session created despite missing remote command: count=%d", m.Count())
+	}
+}
+
+func TestCreateSSHOKProceeds(t *testing.T) {
+	m := sshTestManager(t, ValidateOK)
+	_, err := m.Create(80, 24, "", "/tmp", sshBackend())
+	if err == nil || err.Error() != "fake spawn reached" {
+		t.Fatalf("expected spawn to be reached, got %v", err)
+	}
+}
+
+func TestCreateSSHConnErrorProceeds(t *testing.T) {
+	m := sshTestManager(t, ValidateConnError)
+	_, err := m.Create(80, 24, "", "/tmp", sshBackend())
+	if err == nil || err.Error() != "fake spawn reached" {
+		t.Fatalf("expected spawn to be reached despite connError, got %v", err)
+	}
+}
+
+func TestCreateSSHValidateReached(t *testing.T) {
+	m := sshTestManager(t, ValidateOK)
+	_, err := m.Create(80, 24, "", "", sshBackend())
+	if err == nil || err.Error() != "fake spawn reached" {
+		t.Fatalf("expected spawn to be reached, got %v", err)
+	}
 }

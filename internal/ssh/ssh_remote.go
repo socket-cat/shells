@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"shells/internal/pty"
+	"shells/internal/session"
 	"shells/internal/util"
 )
 
@@ -397,6 +398,90 @@ func (m *Manager) SearchRemoteBinaries(connID, host, user string, port int, pref
 	m.cacheMu.Unlock()
 
 	return prefixFilter(binaries, prefix), nil
+}
+
+// validateResult reports the outcome of a remote cwd/command validation.
+type validateResult int
+
+const (
+	validateOK validateResult = iota
+	validateCwdBad
+	validateCmdBad
+	validateConnError
+)
+
+// ValidateRemote checks, in ONE ssh round-trip, that the remote cwd exists
+// (test -d) and/or that a bare command resolves (command -v). Returns
+// validateConnError when ssh itself fails — never blocks a spawn.
+func (m *Manager) ValidateRemote(connID, host, user string, port int, cwd, command string) (validateResult, error) {
+	if err := ValidateConnectionID(connID); err != nil {
+		return validateConnError, err
+	}
+	m.probeSem <- struct{}{}
+	defer func() { <-m.probeSem }()
+	keyPath := filepath.Join(m.cfg.SSHKeysDir, connID)
+
+	var parts []string
+	if cwd != "" {
+		parts = append(parts, fmt.Sprintf("test -d %s || exit 10", shellEscape(cwd)))
+	}
+	if command != "" && !strings.ContainsAny(command, " \t/") {
+		parts = append(parts, fmt.Sprintf("command -v %s >/dev/null 2>&1 || exit 11", shellEscape(command)))
+	}
+	if len(parts) == 0 {
+		return validateOK, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	args := []string{
+		"-i", keyPath,
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=5",
+		"-o", "StrictHostKeyChecking=" + sshStrictness(),
+		"-o", "UserKnownHostsFile=" + keyPath + ".known_hosts",
+		"-o", "PreferredAuthentications=publickey",
+		"-o", "LogLevel=ERROR",
+		"-p", strconv.Itoa(port),
+		fmt.Sprintf("%s@%s", user, host),
+		remoteCommand(strings.Join(parts, "; ")),
+	}
+
+	out, err := exec.CommandContext(ctx, "ssh", args...).CombinedOutput()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			switch ee.ExitCode() {
+			case 10:
+				return validateCwdBad, nil
+			case 11:
+				return validateCmdBad, nil
+			}
+		}
+		return validateConnError, fmt.Errorf("ssh validate: %s", strings.TrimSpace(string(out)))
+	}
+	return validateOK, nil
+}
+
+// Validate returns a session.Manager.SSHValidate callback wired to
+// ValidateRemote. It can be assigned directly in main.go.
+func (m *Manager) Validate() func(backend *session.Backend, command, cwd string) (session.ValidateResult, error) {
+	return func(backend *session.Backend, command, cwd string) (session.ValidateResult, error) {
+		res, err := m.ValidateRemote(backend.ConnectionID, backend.Host, backend.User, backend.Port, cwd, command)
+		if err != nil {
+			return session.ValidateConnError, err
+		}
+		switch res {
+		case validateCwdBad:
+			return session.ValidateCwdBad, nil
+		case validateCmdBad:
+			return session.ValidateCmdBad, nil
+		case validateConnError:
+			return session.ValidateConnError, nil
+		default:
+			return session.ValidateOK, nil
+		}
+	}
 }
 
 // RemoveRemoteKey removes our public key from the remote authorized_keys.

@@ -96,7 +96,23 @@ type Manager struct {
 	// SpawnSSH, if set, launches an SSH-backed terminal. Set by the ssh
 	// package after registration to avoid an import cycle.
 	SpawnSSH func(backend *Backend, cols, rows int, command, cwd string) (*pty.Term, string, string, error)
+
+	// SSHValidate, if set, validates the remote cwd / bare command before an
+	// SSH spawn. Set by the ssh package after registration to avoid an import
+	// cycle. ValidateConnError must NOT block the spawn.
+	SSHValidate func(backend *Backend, command, cwd string) (ValidateResult, error)
 }
+
+// ValidateResult reports the outcome of validating a remote cwd / command
+// before an SSH spawn.
+type ValidateResult int
+
+const (
+	ValidateOK ValidateResult = iota
+	ValidateCwdBad
+	ValidateCmdBad
+	ValidateConnError
+)
 
 // New creates a Manager bound to the given configuration.
 func New(cfg *config.Config) (*Manager, error) {
@@ -158,6 +174,24 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		}
 		if backend.Host == "" || backend.User == "" {
 			return nil, fmt.Errorf("SSH backend requires host and user")
+		}
+		// Validate the remote cwd and bare command BEFORE spawn so a bogus
+		// folder/binary fails loudly (typed error → modal + recents prune)
+		// instead of printing into the terminal and contaminating recents.
+		// ValidateConnError (ssh itself unreachable) never blocks — the picker
+		// already proved connectivity and spawn would fail loudly anyway.
+		if m.SSHValidate != nil {
+			res, verr := m.SSHValidate(backend, command, cwd)
+			if verr != nil {
+				log.Printf("ssh: validate: %v — proceeding with spawn", verr)
+			} else {
+				switch res {
+				case ValidateCwdBad:
+					return nil, fmt.Errorf("%w: %q: not a directory", ErrCwdUnusable, cwd)
+				case ValidateCmdBad:
+					return nil, fmt.Errorf("%w: %q", ErrCommandNotFound, command)
+				}
+			}
 		}
 		t, dir, ttl, err := m.SpawnSSH(backend, cols, rows, command, cwd)
 		if err != nil {
