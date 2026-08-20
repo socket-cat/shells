@@ -26,4 +26,5 @@ tea_debug.log
 
 # Local development (not for public repo)
 /devel/
+/plans/
 /AGENTS.md
