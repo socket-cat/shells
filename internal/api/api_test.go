@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"shells/internal/auth"
 	"shells/internal/config"
@@ -22,6 +21,7 @@ import (
 	"shells/internal/pty"
 	"shells/internal/session"
 	"shells/internal/ssh"
+	"shells/internal/util"
 )
 
 func apiTestConfig(t *testing.T) *config.Config {
@@ -46,7 +46,7 @@ func newTestHandler(t *testing.T, cfg *config.Config) (*Handler, *session.Manage
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Handler{cfg: cfg, manager: mgr, rateLimits: map[string][]time.Time{}}, mgr
+	return &Handler{cfg: cfg, manager: mgr, rateLimiter: util.NewRateLimiter()}, mgr
 }
 
 func TestHandleSessionsBadCwdFailsLoud(t *testing.T) {
@@ -133,7 +133,7 @@ func TestSessionsCommandNotFoundOverWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &Handler{cfg: cfg, manager: mgr, auth: authStore, rateLimits: map[string][]time.Time{}}
+	h := &Handler{cfg: cfg, manager: mgr, auth: authStore, rateLimiter: util.NewRateLimiter()}
 
 	token := "test-token-123"
 	apiKey := []byte("0123456789abcdef0123456789abcdef")
@@ -395,7 +395,7 @@ func TestSessionsSSHBadCwdOverWire(t *testing.T) {
 	sshMgr := ssh.NewManager(cfg)
 	mgr.SpawnSSH = ssh.Spawn(cfg)
 	mgr.SSHValidate = sshMgr.Validate()
-	h := &Handler{cfg: cfg, manager: mgr, auth: authStore, rateLimits: map[string][]time.Time{}}
+	h := &Handler{cfg: cfg, manager: mgr, auth: authStore, rateLimiter: util.NewRateLimiter()}
 
 	token := "test-token-123"
 	apiKey := []byte("0123456789abcdef0123456789abcdef")

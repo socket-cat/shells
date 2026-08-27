@@ -52,6 +52,13 @@ var ErrCommandNotFound = errors.New("command not found")
 // oscText cap.
 const maxCarry = 4096
 
+// termOpDrainWait caps how long destroy waits for in-flight guarded PTY ops
+// to finish before proceeding anyway. SIGKILL unblocks all writes a live
+// consumer would release; a write parked on a full PTY input buffer is not
+// reliably interruptible, so destroy proceeds regardless — the bound exists
+// precisely so such stalls can never hang Destroy.
+const termOpDrainWait = 500 * time.Millisecond
+
 // Session represents one live terminal.
 type Session struct {
 	ID           string
@@ -71,6 +78,16 @@ type Session struct {
 	activeModes  map[string]bool
 	streamParser *stream.Parser
 	destroyed    bool
+	// H-5 rework: guarded Term ops (TryTermWrite/TryTermResize) take NO lock
+	// across the PTY syscall — a blocked write can therefore never wedge
+	// destroy. The guard is a fast `destroyed` check plus error tolerance:
+	// destroy sets `destroyed` under a short s.mu critical section, releases,
+	// then SIGKILLs the child so in-flight writes unwind with ErrClosed/EIO
+	// as the slave closes. A write parked on a full PTY input buffer may not
+	// wake; it strands one goroutine bounded by flood size. termOps counts
+	// ops still executing; destroy bounds-drains it (termOpDrainWait) and
+	// proceeds regardless of pathological stalls.
+	termOps int
 	// carry holds the trailing bytes of a partially-received escape sequence
 	// (parser not back in the ground state). It is prepended to the next
 	// chunk before pushing to outputBuffer so replayed chunks never start
@@ -380,6 +397,9 @@ func (m *Manager) Destroy(id string) bool {
 }
 
 func (m *Manager) destroy(s *Session) bool {
+	// H-5 rework: short critical section ONLY — no lock is held across
+	// Term.Kill or any PTY syscall, so a blocked in-flight write cannot wedge
+	// Destroy here.
 	s.mu.Lock()
 	if s.destroyed {
 		s.mu.Unlock()
@@ -388,7 +408,13 @@ func (m *Manager) destroy(s *Session) bool {
 	s.destroyed = true
 	s.mu.Unlock()
 
+	// Kill unblocks every write a live consumer would release (ErrClosed/EIO
+	// once the slave closes). A pathological write parked on a full PTY input
+	// buffer is NOT reliably interruptible without poller-backed I/O; it ends
+	// at most one goroutine bounded by flood size, while destroy itself stays
+	// bounded by termOpDrainWait — no lock is ever held across the syscall.
 	_ = s.Term.Kill()
+	s.waitForTermOps(termOpDrainWait)
 
 	m.mu.Lock()
 	delete(m.sessions, s.ID)
@@ -414,6 +440,7 @@ func (m *Manager) DestroyAll() {
 		s.destroyed = true
 		s.mu.Unlock()
 		_ = s.Term.Kill()
+		s.waitForTermOps(termOpDrainWait)
 		if m.onDestroy != nil {
 			m.onDestroy(s.ID)
 		}
@@ -421,6 +448,71 @@ func (m *Manager) DestroyAll() {
 }
 
 // --- Session accessors (thread-safe) ---
+
+// errDestroyed is returned by TryTermWrite/TryTermResize when the session has
+// been destroyed and its PTY may be closing or closed.
+var errDestroyed = errors.New("session destroyed")
+
+// beginTermOp registers an in-flight guarded PTY op. It returns false once
+// the session is destroyed, in which case no registration happens.
+func (s *Session) beginTermOp() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.destroyed {
+		return false
+	}
+	s.termOps++
+	return true
+}
+
+// endTermOp deregisters an op registered via beginTermOp.
+func (s *Session) endTermOp() {
+	s.mu.Lock()
+	s.termOps--
+	s.mu.Unlock()
+}
+
+// waitForTermOps bounds-waits for in-flight guarded PTY ops to finish, then
+// returns even if some are still executing — SIGKILL unblocks most writers,
+// and destroy must never wait unboundedly on the pathological remainder.
+func (s *Session) waitForTermOps(max time.Duration) {
+	deadline := time.Now().Add(max)
+	for {
+		s.mu.Lock()
+		n := s.termOps
+		s.mu.Unlock()
+		if n == 0 || !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TryTermWrite writes data to the session's PTY only if the session is still
+// live at call time. No lock is held across the write itself (a full PTY
+// input buffer blocks it indefinitely), so this cannot wedge Destroy: after
+// Destroy SIGKILLs the child most stragglers fail benignly with ErrClosed/
+// EIO, and a rare parked write strands at most one goroutine — an accepted,
+// harmless race in exchange for guaranteed progress of Destroy.
+func (s *Session) TryTermWrite(data []byte) (int, error) {
+	if !s.beginTermOp() {
+		return 0, errDestroyed
+	}
+	n, err := s.Term.Write(data)
+	s.endTermOp()
+	return n, err
+}
+
+// TryTermResize updates the PTY window size only if the session is still
+// live, under the same guard-and-benign-race contract as TryTermWrite.
+func (s *Session) TryTermResize(cols, rows int) error {
+	if !s.beginTermOp() {
+		return errDestroyed
+	}
+	err := s.Term.Resize(cols, rows)
+	s.endTermOp()
+	return err
+}
 
 func (s *Session) IsDestroyed() bool {
 	s.mu.Lock()

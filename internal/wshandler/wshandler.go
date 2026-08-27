@@ -36,6 +36,12 @@ const (
 	coalesceMs              = 8 * time.Millisecond
 	coalesceFlushBytes      = 32768
 	lockAllMinInterval      = 5 * time.Second
+
+	// wsConnectsPerIP caps new WebSocket connects per minute per client IP.
+	// A normal single-admin client uses ~1-3 (including reconnects), so the
+	// limit only trips on pre-auth flood attempts trying to monopolize the
+	// global connection cap.
+	wsConnectsPerIP = 30
 )
 
 // attachState holds the per-(client,session) relay state.
@@ -82,6 +88,10 @@ type Handler struct {
 
 	mu      sync.Mutex
 	clients map[*ClientConn]struct{}
+
+	// connLimiter bounds new WS connects per IP (see wsConnectsPerIP),
+	// mirroring the api package's per-IP limiters via the shared helper.
+	connLimiter *util.RateLimiter
 }
 
 // New creates a WS handler bound to the given config, session manager, and
@@ -94,11 +104,12 @@ func New(cfg *config.Config, mgr *session.Manager, authStore *auth.Store) *Handl
 		upgrader.CheckOrigin = authStore.HasAllowedOrigin
 	}
 	return &Handler{
-		cfg:      cfg,
-		manager:  mgr,
-		auth:     authStore,
-		clients:  make(map[*ClientConn]struct{}),
-		upgrader: upgrader,
+		cfg:         cfg,
+		manager:     mgr,
+		auth:        authStore,
+		clients:     make(map[*ClientConn]struct{}),
+		connLimiter: util.NewRateLimiter(),
+		upgrader:    upgrader,
 	}
 }
 
@@ -112,6 +123,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	if connCount >= 100 {
 		http.Error(w, "server busy", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Per-IP limit so one unauthenticated peer cannot open all 100 sockets
+	// before any auth handshake. The IP is derived exactly like the api
+	// package's limiters (proxy headers only when trustProxy).
+	ip := util.ClientIP(r, h.cfg.TrustProxy)
+	if !h.connLimiter.Allow(ip, wsConnectsPerIP, time.Minute) {
+		http.Error(w, "too many connection attempts", http.StatusTooManyRequests)
 		return
 	}
 
@@ -340,7 +360,9 @@ func (cc *ClientConn) onMessage(payload []byte, isBinary bool) {
 		data := plaintext[16:]
 		s := cc.handler.manager.Get(sid)
 		if s != nil && !s.IsDestroyed() {
-			_, _ = s.Term.Write(data)
+			// Guarded write: liveness-checked, never wedges Destroy; a
+			// straggler racing Destroy fails benignly (ErrClosed/EIO).
+			_, _ = s.TryTermWrite(data)
 		}
 		return
 	}
@@ -548,7 +570,9 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		if clampedRows == 0 {
 			clampedRows = 24
 		}
-		_ = s.Term.Resize(clampedCols, clampedRows)
+		// Guarded resize: liveness-checked; post-destroy races fail
+		// benignly and can never wedge Destroy.
+		_ = s.TryTermResize(clampedCols, clampedRows)
 		s.SetSize(clampedCols, clampedRows)
 	}
 
@@ -596,7 +620,12 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		if s.InAlternateScreen() {
 			cc.sendEncrypted([]byte("\x1b[?1049h"), st.sidBuf)
 		}
-		_ = s.Term.SignalWinch()
+		if !s.IsDestroyed() {
+			// Raw-fd ioctls: fast liveness check keeps the common path off a
+			// dead PTY; post-destroy ioctl on a closed fd just returns an
+			// error, never panics.
+			_ = s.Term.SignalWinch()
+		}
 	}
 
 	cc.mu.Unlock()
@@ -671,7 +700,9 @@ func (cc *ClientConn) handleResize(sid string, msg map[string]any) {
 		curCols, curRows := s.GetSize()
 		c := util.ClampInt(cols, curCols, 1, 500)
 		r := util.ClampInt(rows, curRows, 1, 200)
-		_ = s.Term.Resize(c, r)
+		// Guarded resize: liveness-checked; post-destroy races fail
+		// benignly and can never wedge Destroy.
+		_ = s.TryTermResize(c, r)
 		s.SetSize(c, r)
 		cc.handler.broadcastPtySize(sid, s, cc.ws)
 	}
@@ -697,7 +728,9 @@ func (cc *ClientConn) handleClaimActive(sid string, msg map[string]any) {
 	s.SetActiveWS(cc.ws)
 	c := util.ClampInt(cols, 80, 1, 500)
 	r := util.ClampInt(rows, 24, 1, 200)
-	_ = s.Term.Resize(c, r)
+	// Guarded resize: liveness-checked; post-destroy races fail
+	// benignly and can never wedge Destroy.
+	_ = s.TryTermResize(c, r)
 	s.SetSize(c, r)
 	cc.handler.broadcastPtySize(sid, s, cc.ws)
 }

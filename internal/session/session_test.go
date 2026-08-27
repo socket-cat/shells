@@ -4,10 +4,12 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,20 +75,28 @@ func TestSpawnBashLandsInCwd(t *testing.T) {
 	}
 	defer m.Destroy(s.ID)
 
+	var mu sync.Mutex
 	var out strings.Builder
 	cancel := s.Term.OnData(func(data []byte) {
+		mu.Lock()
+		defer mu.Unlock()
 		out.Write(data)
 	})
 	defer cancel()
 	if _, err := s.Term.Write([]byte("pwd\n")); err != nil {
 		t.Fatal(err)
 	}
+	output := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return out.String()
+	}
 	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(out.String(), dir) && time.Now().Before(deadline) {
+	for !strings.Contains(output(), dir) && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if !strings.Contains(out.String(), dir) {
-		t.Fatalf("bash did not land in cwd %q: %q", dir, out.String())
+	if !strings.Contains(output(), dir) {
+		t.Fatalf("bash did not land in cwd %q: %q", dir, output())
 	}
 }
 
@@ -125,6 +135,139 @@ func TestBuildShellEnvPWD(t *testing.T) {
 		}
 	}
 	t.Fatal("PWD not set to the working directory")
+}
+
+func TestTryTermWriteLiveThenDestroyed(t *testing.T) {
+	m, err := New(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.Create(80, 24, "", t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := s.TryTermWrite([]byte("echo ok\n")); err != nil {
+		t.Fatalf("live write rejected: %v", err)
+	}
+	m.Destroy(s.ID)
+	if _, err := s.TryTermWrite([]byte("x\n")); !errors.Is(err, errDestroyed) {
+		t.Fatalf("write after Destroy: want errDestroyed, got %v", err)
+	}
+	if err := s.TryTermResize(120, 40); !errors.Is(err, errDestroyed) {
+		t.Fatalf("resize after Destroy: want errDestroyed, got %v", err)
+	}
+}
+
+// TestTryTermWriteRaceWithDestroy hammers the guarded write path while Destroy
+// lands concurrently; a torn guard+write (TOCTOU use-after-destroy) shows up
+// as a panic or a -race report. Run with go test -race.
+func TestTryTermWriteRaceWithDestroy(t *testing.T) {
+	m, err := New(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.Create(80, 24, "", t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			buf := []byte("echo race\n")
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_, _ = s.TryTermWrite(buf) // must never panic, even post-destroy
+				}
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	m.Destroy(s.ID)
+	close(stop)
+	// Writers normally unwind immediately on SIGKILL; a pathological park on
+	// a full PTY input buffer may strand one goroutine by design, so the join
+	// is best-effort (see TestDestroyDoesNotWedgeOnBlockedPTYWrite).
+	if !waitWGWithTimeout(&wg, 5*time.Second) {
+		t.Log("writer goroutine parked post-destroy; tolerated by design")
+	}
+}
+
+// waitWGWithTimeout reports whether wg finished within max.
+func waitWGWithTimeout(wg *sync.WaitGroup, max time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(max):
+		return false
+	}
+}
+
+// TestDestroyDoesNotWedgeOnBlockedPTYWrite proves FINDING 1 is dead: a child
+// that never reads stdin (`sleep infinity`) lets the kernel PTY input queue
+// fill (default ~4KB), so an in-flight TryTermWrite would block indefinitely.
+// Under the pre-rework RLock design destroy could not progress at all — this
+// test times out there. Post-rework: the flag is set under a short critical
+// section, then Kill + bounded drain. SIGKILL unblocks normal consumers;
+// a pathological park leaks one goroutine bounded by flood size; Destroy
+// itself is always bounded by termOpDrainWait.
+//
+// Honest limits: the 150ms soak makes blockage overwhelmingly likely but is
+// not proof the write was mid-syscall; the sharp assertion is wall-clock
+// "Destroy completes in bounded time regardless".
+func TestDestroyDoesNotWedgeOnBlockedPTYWrite(t *testing.T) {
+	m, err := New(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.Create(80, 24, "sleep infinity", t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	stop := make(chan struct{})
+	writersDone := make(chan struct{})
+	go func() {
+		defer close(writersDone)
+		buf := bytes.Repeat([]byte("x"), 4096)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = s.TryTermWrite(buf)
+			}
+		}
+	}()
+
+	time.Sleep(150 * time.Millisecond) // saturate the PTY input queue
+	start := time.Now()
+	if !m.Destroy(s.ID) {
+		close(stop)
+		t.Fatal("destroy reported already-destroyed")
+	}
+	elapsed := time.Since(start)
+
+	close(stop)
+	select {
+	case <-writersDone:
+	case <-time.After(5 * time.Second):
+		// Non-fatal by design: a write parked mid-syscall strands its
+		// goroutine until process death; destroy itself stayed bounded.
+		t.Log("writer goroutine parked post-destroy; tolerated by design")
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("destroy wedged behind blocked writes for %v", elapsed)
+	}
 }
 
 // sshTestManager returns a Manager wired with a fake SpawnSSH (returns

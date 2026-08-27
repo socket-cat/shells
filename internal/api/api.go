@@ -45,9 +45,9 @@ type Handler struct {
 
 	startTime time.Time
 
-	rateMu        sync.Mutex
-	rateLimits    map[string][]time.Time
-	lastRateSweep time.Time
+	// Per-key sliding-window admission limiter shared by all api endpoints
+	// (keys carry an endpoint prefix + client IP).
+	rateLimiter *util.RateLimiter
 
 	// Self-update check state: single-flight + short cache.
 	updateMu       sync.Mutex
@@ -74,8 +74,8 @@ func New(cfg *config.Config, mgr *session.Manager, authStore *auth.Store, sshMgr
 		auth:       authStore,
 		sshMgr:     sshMgr,
 		brand:      brand,
-		startTime:  time.Now(),
-		rateLimits: make(map[string][]time.Time),
+		startTime:   time.Now(),
+		rateLimiter: util.NewRateLimiter(),
 	}
 }
 
@@ -627,35 +627,12 @@ func parseBackend(body map[string]any) *session.Backend {
 	}
 }
 
+// rateAllow admits at most limit requests per sliding window per key
+// (endpoint prefix + client IP), delegating to the shared util.RateLimiter.
+// Note: rejected attempts are no longer recorded (per-key entries are capped
+// at limit for bounded memory); admission decisions are otherwise unchanged.
 func (h *Handler) rateAllow(key string, limit int, window time.Duration) bool {
-	h.rateMu.Lock()
-	defer h.rateMu.Unlock()
-	now := time.Now()
-	cutoff := now.Add(-window)
-	if now.Sub(h.lastRateSweep) > time.Minute {
-		h.lastRateSweep = now
-		for k, ts := range h.rateLimits {
-			keep := false
-			for _, t := range ts {
-				if t.After(cutoff) {
-					keep = true
-					break
-				}
-			}
-			if !keep {
-				delete(h.rateLimits, k)
-			}
-		}
-	}
-	var valid []time.Time
-	for _, t := range h.rateLimits[key] {
-		if t.After(cutoff) {
-			valid = append(valid, t)
-		}
-	}
-	valid = append(valid, now)
-	h.rateLimits[key] = valid
-	return len(valid) <= limit
+	return h.rateLimiter.Allow(key, limit, window)
 }
 
 func (h *Handler) clientIP(r *http.Request) string {
