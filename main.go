@@ -120,7 +120,7 @@ func main() {
 			log.Fatalf("selftls: %v", err)
 		}
 	}
-	log.Printf("Shells v%s listening on %s://%s (token: %s...)", version, scheme, addr, cfg.AppToken[:8])
+	log.Printf("Shells v%s listening on %s://%s %s", version, scheme, addr, tokenLogNote(cfg.TokenSource))
 	log.Printf("State dir: %s", cfg.ServerKeyDir)
 	switch cfg.SecretSource {
 	case "generated":
@@ -235,5 +235,17 @@ func main() {
 			os.Exit(selfupdate.PortBusyCode) // supervisor stops cleanly, no crash-loop
 		}
 		log.Fatalf("server: %v", serveErr)
+	}
+}
+
+// tokenLogNote describes where the app auth token came from WITHOUT printing
+// any substring of it: tokens are bearer credentials and startup logs are
+// routinely shipped to remote aggregation, so only the source is named.
+func tokenLogNote(source string) string {
+	switch source {
+	case "env":
+		return "(auth token from $SHELLS_TOKEN)"
+	default:
+		return "(auth token auto-generated this launch — set $SHELLS_TOKEN to pin one)"
 	}
 }

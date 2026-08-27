@@ -169,11 +169,17 @@ func GenerateHMACProof(msg []byte) string {
 	return base64.StdEncoding.EncodeToString(hmacSHA256(msg))
 }
 
-// VerifyHMACProof validates a base64 proof in constant time.
+// VerifyHMACProof validates a base64 proof against HMAC-SHA256(msg).
+//
+// Content is compared in constant time via subtle.ConstantTimeCompare. The
+// comparison is length-sensitive only in that unequal-length inputs short-
+// circuit without reading bytes; that leaks nothing secret because the proof
+// length is protocol-fixed (SHA-256: always 32 raw bytes / 44 base64 chars)
+// and therefore public.
 func VerifyHMACProof(msg []byte, proofB64 string) bool {
 	want := hmacSHA256(msg)
 	got, err := base64.StdEncoding.DecodeString(proofB64)
-	if err != nil || len(got) != len(want) {
+	if err != nil {
 		return false
 	}
 	return subtle.ConstantTimeCompare(got, want) == 1

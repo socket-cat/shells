@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -342,5 +344,51 @@ func TestCreateSSHValidateReached(t *testing.T) {
 	_, err := m.Create(80, 24, "", "", sshBackend())
 	if err == nil || err.Error() != "fake spawn reached" {
 		t.Fatalf("expected spawn to be reached, got %v", err)
+	}
+}
+
+// TestDestroyAllWaitsForChildExit proves L-6: after DestroyAll returns, the
+// SIGKILLed PTY children are not just signalled but actually reaped —
+// kill(pid, 0) reports ESRCH immediately, with no polling grace. `exec`
+// replaces the shell image in-place so the session PID is the sleeper itself
+// and SIGKILL leaves zero orphans behind.
+//
+// Honest limits: reap-before-return is deterministic (the exited channel is
+// closed strictly after cmd.Wait), but DestroyAll returning early "by luck"
+// on an idle machine could also pass a one-shot check; the wall-clock bound
+// additionally pins that the global deadline is honored.
+func TestDestroyAllWaitsForChildExit(t *testing.T) {
+	m, err := New(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	const n = 3
+	pids := make([]int, n)
+	for i := 0; i < n; i++ {
+		s, err := m.Create(80, 24, "exec sleep 30", dir, nil)
+		if err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		pids[i] = s.Pid
+	}
+
+	var destroyed atomic.Int32
+	m.OnDestroy(func(string) { destroyed.Add(1) })
+
+	start := time.Now()
+	m.DestroyAll()
+	elapsed := time.Since(start)
+
+	if elapsed > destroyAllGrace+termOpDrainWait+time.Second {
+		t.Fatalf("DestroyAll took %v; global deadline breached", elapsed)
+	}
+	for i, pid := range pids {
+		if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("child %d (pid %d) still alive right after DestroyAll: %v", i, pid, err)
+		}
+	}
+	if got := destroyed.Load(); got != n {
+		t.Fatalf("onDestroy fired %d times, want %d", got, n)
 	}
 }

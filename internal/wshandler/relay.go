@@ -163,6 +163,19 @@ func (cc *ClientConn) flushClientBuffer(sid string) {
 
 // --- backpressure ---
 
+// Lock-order invariant (M-4 audit: reviewed-safe, no inversion):
+//
+//	handler.mu → cc.mu → websocket.Conn.queueMu
+//
+// backpressureCheck takes cc.mu and reaches queueMu only through
+// sendEncrypted → SendBinary. The reverse edges do not exist: the transport
+// takes queueMu solely inside its own send/close/write-loop snapshots and
+// always releases it before invoking OnMessage/OnClose callbacks (so no code
+// ever acquires cc.mu while holding queueMu), and handler.mu is used
+// snapshot-only (forEachClient copies the registry before acting) — cleanup()
+// releases cc.mu BEFORE taking handler.mu rather than nesting them. With
+// every multi-lock acquisition following this single forward order there is
+// no cycle; new relay code must keep the same order.
 func (cc *ClientConn) backpressureCheck() {
 	if cc.ws.BufferedAmount() > int64(cc.cfg.WSCWM) {
 		cc.ws.Close(1008, "Buffer exceeded limit")

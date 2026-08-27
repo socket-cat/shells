@@ -69,11 +69,11 @@ const exitCodeRestart = 42
 // New creates an API handler.
 func New(cfg *config.Config, mgr *session.Manager, authStore *auth.Store, sshMgr *ssh.Manager, brand *branding.Store) *Handler {
 	return &Handler{
-		cfg:        cfg,
-		manager:    mgr,
-		auth:       authStore,
-		sshMgr:     sshMgr,
-		brand:      brand,
+		cfg:         cfg,
+		manager:     mgr,
+		auth:        authStore,
+		sshMgr:      sshMgr,
+		brand:       brand,
 		startTime:   time.Now(),
 		rateLimiter: util.NewRateLimiter(),
 	}

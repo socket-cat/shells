@@ -59,6 +59,11 @@ const maxCarry = 4096
 // precisely so such stalls can never hang Destroy.
 const termOpDrainWait = 500 * time.Millisecond
 
+// destroyAllGrace is the SINGLE shared deadline for DestroyAll's wait on all
+// killed children to be reaped (sessions are killed concurrently, so 200
+// sessions cost ~one drain + this grace — not per-session sums).
+const destroyAllGrace = 2 * time.Second
+
 // Session represents one live terminal.
 type Session struct {
 	ID           string
@@ -93,6 +98,12 @@ type Session struct {
 	// chunk before pushing to outputBuffer so replayed chunks never start
 	// mid-sequence. Only touched from the session's OnData goroutine.
 	carry []byte
+
+	// exited is closed by the Term reaper (OnExit subscriber registered in
+	// Create) once the child process has been fully waited-for. Shutdown's
+	// DestroyAll awaits it under a global deadline so SIGKILLed PTY children
+	// are confirmed dead before process exit proceeds.
+	exited chan struct{}
 
 	// Set by wshandler to identify the active (foreground) client for this
 	// session — the one whose dimensions are applied to the PTY. Compared by
@@ -291,6 +302,7 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		CreatedAt:    time.Now().UnixMilli(),
 		outputBuffer: ringbuf.New(m.cfg.OutputBufferMax),
 		activeModes:  make(map[string]bool),
+		exited:       make(chan struct{}),
 	}
 	s.streamParser = stream.New(
 		func(mode string, isSet bool) {
@@ -368,6 +380,13 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		m.destroy(s)
 	})
 
+	// Reap-signal for the shutdown path: fired once cmd.Wait has returned,
+	// i.e. the child is confirmed dead. dispatchExit supports multiple
+	// subscribers, so this runs alongside the auto-destroy hook above.
+	term.OnExit(func(int, string) {
+		close(s.exited)
+	})
+
 	m.mu.Lock()
 	// Re-check: another Create may have filled the gap while we spawned.
 	if len(m.sessions) >= m.cfg.MaxSessions {
@@ -427,6 +446,12 @@ func (m *Manager) destroy(s *Session) bool {
 }
 
 // DestroyAll kills every live session (used during graceful shutdown).
+//
+// L-6 fix: SIGKILL + the termOps drain alone returned before, letting
+// freshly-killed PTY children race process exit. Sessions are now killed
+// concurrently and shutdown awaits each child's actual reap (exited channel)
+// under ONE shared global deadline (destroyAllGrace) — worst case stays
+// ~termOpDrainWait + grace in wall clock, far below a per-session sum.
 func (m *Manager) DestroyAll() {
 	m.mu.Lock()
 	all := make([]*Session, 0, len(m.sessions))
@@ -435,15 +460,34 @@ func (m *Manager) DestroyAll() {
 	}
 	m.sessions = make(map[string]*Session)
 	m.mu.Unlock()
+
+	var wg sync.WaitGroup
 	for _, s := range all {
-		s.mu.Lock()
-		s.destroyed = true
-		s.mu.Unlock()
-		_ = s.Term.Kill()
-		s.waitForTermOps(termOpDrainWait)
-		if m.onDestroy != nil {
-			m.onDestroy(s.ID)
-		}
+		wg.Add(1)
+		go func(s *Session) {
+			defer wg.Done()
+			s.mu.Lock()
+			s.destroyed = true
+			s.mu.Unlock()
+			_ = s.Term.Kill()
+			s.waitForTermOps(termOpDrainWait)
+			<-s.exited // reaper confirms the child is dead (bounded by caller)
+			if m.onDestroy != nil {
+				m.onDestroy(s.ID)
+			}
+		}(s)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(destroyAllGrace):
+		// Grace exhausted: stragglers are SIGKILLed and their reap finishes
+		// asynchronously; proceed with shutdown as designed.
 	}
 }
 
