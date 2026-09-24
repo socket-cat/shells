@@ -629,8 +629,6 @@ func parseBackend(body map[string]any) *session.Backend {
 
 // rateAllow admits at most limit requests per sliding window per key
 // (endpoint prefix + client IP), delegating to the shared util.RateLimiter.
-// Note: rejected attempts are no longer recorded (per-key entries are capped
-// at limit for bounded memory); admission decisions are otherwise unchanged.
 func (h *Handler) rateAllow(key string, limit int, window time.Duration) bool {
 	return h.rateLimiter.Allow(key, limit, window)
 }

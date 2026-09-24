@@ -52,11 +52,8 @@ var ErrCommandNotFound = errors.New("command not found")
 // oscText cap.
 const maxCarry = 4096
 
-// termOpDrainWait caps how long destroy waits for in-flight guarded PTY ops
-// to finish before proceeding anyway. SIGKILL unblocks all writes a live
-// consumer would release; a write parked on a full PTY input buffer is not
-// reliably interruptible, so destroy proceeds regardless — the bound exists
-// precisely so such stalls can never hang Destroy.
+// termOpDrainWait bounds destroy's wait for in-flight guarded PTY ops
+// (see Session.termOps), so a stalled write can never hang Destroy.
 const termOpDrainWait = 500 * time.Millisecond
 
 // destroyAllGrace is the SINGLE shared deadline for DestroyAll's wait on all
@@ -83,7 +80,7 @@ type Session struct {
 	activeModes  map[string]bool
 	streamParser *stream.Parser
 	destroyed    bool
-	// H-5 rework: guarded Term ops (TryTermWrite/TryTermResize) take NO lock
+	// Guarded Term ops (TryTermWrite/TryTermResize) take NO lock
 	// across the PTY syscall — a blocked write can therefore never wedge
 	// destroy. The guard is a fast `destroyed` check plus error tolerance:
 	// destroy sets `destroyed` under a short s.mu critical section, releases,
@@ -416,9 +413,7 @@ func (m *Manager) Destroy(id string) bool {
 }
 
 func (m *Manager) destroy(s *Session) bool {
-	// H-5 rework: short critical section ONLY — no lock is held across
-	// Term.Kill or any PTY syscall, so a blocked in-flight write cannot wedge
-	// Destroy here.
+	// Short critical section only — never held across a PTY syscall.
 	s.mu.Lock()
 	if s.destroyed {
 		s.mu.Unlock()
@@ -427,11 +422,7 @@ func (m *Manager) destroy(s *Session) bool {
 	s.destroyed = true
 	s.mu.Unlock()
 
-	// Kill unblocks every write a live consumer would release (ErrClosed/EIO
-	// once the slave closes). A pathological write parked on a full PTY input
-	// buffer is NOT reliably interruptible without poller-backed I/O; it ends
-	// at most one goroutine bounded by flood size, while destroy itself stays
-	// bounded by termOpDrainWait — no lock is ever held across the syscall.
+	// SIGKILL unwinds in-flight writes; the drain is bounded (see termOps).
 	_ = s.Term.Kill()
 	s.waitForTermOps(termOpDrainWait)
 
@@ -446,12 +437,8 @@ func (m *Manager) destroy(s *Session) bool {
 }
 
 // DestroyAll kills every live session (used during graceful shutdown).
-//
-// L-6 fix: SIGKILL + the termOps drain alone returned before, letting
-// freshly-killed PTY children race process exit. Sessions are now killed
-// concurrently and shutdown awaits each child's actual reap (exited channel)
-// under ONE shared global deadline (destroyAllGrace) — worst case stays
-// ~termOpDrainWait + grace in wall clock, far below a per-session sum.
+// Sessions are killed concurrently and each child's reap is awaited under
+// one shared deadline (destroyAllGrace), not a per-session sum.
 func (m *Manager) DestroyAll() {
 	m.mu.Lock()
 	all := make([]*Session, 0, len(m.sessions))
@@ -537,12 +524,8 @@ func (s *Session) waitForTermOps(max time.Duration) {
 	}
 }
 
-// TryTermWrite writes data to the session's PTY only if the session is still
-// live at call time. No lock is held across the write itself (a full PTY
-// input buffer blocks it indefinitely), so this cannot wedge Destroy: after
-// Destroy SIGKILLs the child most stragglers fail benignly with ErrClosed/
-// EIO, and a rare parked write strands at most one goroutine — an accepted,
-// harmless race in exchange for guaranteed progress of Destroy.
+// TryTermWrite writes to the PTY unless the session is destroyed. No lock is
+// held across the write, so it can never wedge Destroy (see termOps).
 func (s *Session) TryTermWrite(data []byte) (int, error) {
 	if !s.beginTermOp() {
 		return 0, errDestroyed
@@ -552,8 +535,8 @@ func (s *Session) TryTermWrite(data []byte) (int, error) {
 	return n, err
 }
 
-// TryTermResize updates the PTY window size only if the session is still
-// live, under the same guard-and-benign-race contract as TryTermWrite.
+// TryTermResize resizes the PTY unless the session is destroyed (see
+// TryTermWrite).
 func (s *Session) TryTermResize(cols, rows int) error {
 	if !s.beginTermOp() {
 		return errDestroyed

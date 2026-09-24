@@ -359,10 +359,8 @@ func (cc *ClientConn) onMessage(payload []byte, isBinary bool) {
 		sid := bytesToSid(plaintext[:16])
 		data := plaintext[16:]
 		s := cc.handler.manager.Get(sid)
-		if s != nil && !s.IsDestroyed() {
-			// Guarded write: liveness-checked, never wedges Destroy; a
-			// straggler racing Destroy fails benignly (ErrClosed/EIO).
-			_, _ = s.TryTermWrite(data)
+		if s != nil {
+			_, _ = s.TryTermWrite(data) // no-op once destroyed
 		}
 		return
 	}
@@ -570,8 +568,6 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		if clampedRows == 0 {
 			clampedRows = 24
 		}
-		// Guarded resize: liveness-checked; post-destroy races fail
-		// benignly and can never wedge Destroy.
 		_ = s.TryTermResize(clampedCols, clampedRows)
 		s.SetSize(clampedCols, clampedRows)
 	}
@@ -700,8 +696,6 @@ func (cc *ClientConn) handleResize(sid string, msg map[string]any) {
 		curCols, curRows := s.GetSize()
 		c := util.ClampInt(cols, curCols, 1, 500)
 		r := util.ClampInt(rows, curRows, 1, 200)
-		// Guarded resize: liveness-checked; post-destroy races fail
-		// benignly and can never wedge Destroy.
 		_ = s.TryTermResize(c, r)
 		s.SetSize(c, r)
 		cc.handler.broadcastPtySize(sid, s, cc.ws)
@@ -728,8 +722,6 @@ func (cc *ClientConn) handleClaimActive(sid string, msg map[string]any) {
 	s.SetActiveWS(cc.ws)
 	c := util.ClampInt(cols, 80, 1, 500)
 	r := util.ClampInt(rows, 24, 1, 200)
-	// Guarded resize: liveness-checked; post-destroy races fail
-	// benignly and can never wedge Destroy.
 	_ = s.TryTermResize(c, r)
 	s.SetSize(c, r)
 	cc.handler.broadcastPtySize(sid, s, cc.ws)

@@ -6,8 +6,6 @@ package wshandler
 import (
 	"testing"
 	"time"
-
-	"shells/internal/util"
 )
 
 func TestActivitySignalDue(t *testing.T) {
@@ -32,26 +30,5 @@ func TestActivitySignalDue(t *testing.T) {
 				t.Fatalf("activitySignalDue() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestRateAllowPerIPBurst(t *testing.T) {
-	h := &Handler{connLimiter: util.NewRateLimiter()}
-	window := time.Minute
-	for i := 0; i < wsConnectsPerIP; i++ {
-		if !h.connLimiter.Allow("1.2.3.4", wsConnectsPerIP, window) {
-			t.Fatalf("attempt %d from same IP rejected before the limit", i+1)
-		}
-	}
-	// Rejected attempts must not be recorded, so sustained floods keep
-	// getting rejected without further memory growth (white-box proof in
-	// internal/util/ratelimit_test.go).
-	for i := 0; i < 50; i++ {
-		if h.connLimiter.Allow("1.2.3.4", wsConnectsPerIP, window) {
-			t.Fatalf("flood attempt %d admitted", i+1)
-		}
-	}
-	if !h.connLimiter.Allow("5.6.7.8", wsConnectsPerIP, window) {
-		t.Fatal("different IP affected by first IP's burst")
 	}
 }

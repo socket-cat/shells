@@ -55,12 +55,11 @@ digest() {
 	fi
 }
 
-# JSON validity check: python3 when present, otherwise a stdlib-only Go
-# one-liner (this project always has a Go toolchain). Also asserts the key
-# SPDX fields exist.
-VALGO=$(mktemp "${TMPDIR:-/tmp}/sbom-val.XXXXXX.go")
-trap 'rm -f "$VALGO"' EXIT
-cat > "$VALGO" <<'EOF'
+# JSON + key-SPDX-field check: a stdlib-only Go helper, built once per run
+# (this project always has a Go toolchain).
+VALDIR=$(mktemp -d "${TMPDIR:-/tmp}/sbom-val.XXXXXX")
+trap 'rm -rf "$VALDIR"' EXIT
+cat > "$VALDIR/val.go" <<'EOF'
 package main
 
 import (
@@ -90,13 +89,8 @@ func main() {
 }
 EOF
 
-validate() {
-	if command -v python3 >/dev/null 2>&1; then
-		python3 -m json.tool "$1" >/dev/null
-	else
-		"$GO" run "$VALGO" "$1"
-	fi
-}
+"$GO" build -o "$VALDIR/val" "$VALDIR/val.go" || { echo "error: cannot build SBOM validator" >&2; exit 1; }
+validate() { "$VALDIR/val" "$1"; }
 
 TARGETS="${*:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64}"
 

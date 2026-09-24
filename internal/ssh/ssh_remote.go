@@ -406,22 +406,12 @@ func (m *Manager) SearchRemoteBinaries(connID, host, user string, port int, pref
 	return prefixFilter(binaries, prefix), nil
 }
 
-// validateResult reports the outcome of a remote cwd/command validation.
-type validateResult int
-
-const (
-	validateOK validateResult = iota
-	validateCwdBad
-	validateCmdBad
-	validateConnError
-)
-
 // ValidateRemote checks, in ONE ssh round-trip, that the remote cwd exists
 // (test -d) and/or that a bare command resolves (command -v). Returns
-// validateConnError when ssh itself fails — never blocks a spawn.
-func (m *Manager) ValidateRemote(connID, host, user string, port int, cwd, command string) (validateResult, error) {
+// session.ValidateConnError when ssh itself fails — never blocks a spawn.
+func (m *Manager) ValidateRemote(connID, host, user string, port int, cwd, command string) (session.ValidateResult, error) {
 	if err := ValidateConnectionID(connID); err != nil {
-		return validateConnError, err
+		return session.ValidateConnError, err
 	}
 	m.probeSem <- struct{}{}
 	defer func() { <-m.probeSem }()
@@ -435,7 +425,7 @@ func (m *Manager) ValidateRemote(connID, host, user string, port int, cwd, comma
 		parts = append(parts, fmt.Sprintf("command -v %s >/dev/null 2>&1 || exit 11", shellEscape(command)))
 	}
 	if len(parts) == 0 {
-		return validateOK, nil
+		return session.ValidateOK, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -459,34 +449,21 @@ func (m *Manager) ValidateRemote(connID, host, user string, port int, cwd, comma
 		if ee, ok := err.(*exec.ExitError); ok {
 			switch ee.ExitCode() {
 			case 10:
-				return validateCwdBad, nil
+				return session.ValidateCwdBad, nil
 			case 11:
-				return validateCmdBad, nil
+				return session.ValidateCmdBad, nil
 			}
 		}
-		return validateConnError, fmt.Errorf("ssh validate: %s", strings.TrimSpace(string(out)))
+		return session.ValidateConnError, fmt.Errorf("ssh validate: %s", strings.TrimSpace(string(out)))
 	}
-	return validateOK, nil
+	return session.ValidateOK, nil
 }
 
 // Validate returns a session.Manager.SSHValidate callback wired to
 // ValidateRemote. It can be assigned directly in main.go.
 func (m *Manager) Validate() func(backend *session.Backend, command, cwd string) (session.ValidateResult, error) {
-	return func(backend *session.Backend, command, cwd string) (session.ValidateResult, error) {
-		res, err := m.ValidateRemote(backend.ConnectionID, backend.Host, backend.User, backend.Port, cwd, command)
-		if err != nil {
-			return session.ValidateConnError, err
-		}
-		switch res {
-		case validateCwdBad:
-			return session.ValidateCwdBad, nil
-		case validateCmdBad:
-			return session.ValidateCmdBad, nil
-		case validateConnError:
-			return session.ValidateConnError, nil
-		default:
-			return session.ValidateOK, nil
-		}
+	return func(b *session.Backend, command, cwd string) (session.ValidateResult, error) {
+		return m.ValidateRemote(b.ConnectionID, b.Host, b.User, b.Port, cwd, command)
 	}
 }
 

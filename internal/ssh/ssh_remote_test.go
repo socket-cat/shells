@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"shells/internal/session"
 )
 
 // TestValidateRemoteE2E runs the real ValidateRemote round-trip against a live
@@ -49,20 +51,20 @@ func TestValidateRemoteE2E(t *testing.T) {
 
 	m := NewManager(testConfig(keyDir))
 
-	if res, err := m.ValidateRemote(connID, host, user, 22, "/tmp", "echo e2e-ok"); res != validateOK {
-		t.Fatalf("valid cwd/cmd: expected validateOK, got %v (%v)", res, err)
+	if res, err := m.ValidateRemote(connID, host, user, 22, "/tmp", "echo e2e-ok"); res != session.ValidateOK {
+		t.Fatalf("valid cwd/cmd: expected session.ValidateOK, got %v (%v)", res, err)
 	}
-	if res, err := m.ValidateRemote(connID, host, user, 22, "/nonexistent-shells-e2e-xyz", ""); res != validateCwdBad {
-		t.Fatalf("bad cwd: expected validateCwdBad, got %v (%v)", res, err)
+	if res, err := m.ValidateRemote(connID, host, user, 22, "/nonexistent-shells-e2e-xyz", ""); res != session.ValidateCwdBad {
+		t.Fatalf("bad cwd: expected session.ValidateCwdBad, got %v (%v)", res, err)
 	}
-	if res, err := m.ValidateRemote(connID, host, user, 22, "/tmp", "definitely-not-a-binary-shells-e2e-xyz"); res != validateCmdBad {
-		t.Fatalf("bad command: expected validateCmdBad, got %v (%v)", res, err)
+	if res, err := m.ValidateRemote(connID, host, user, 22, "/tmp", "definitely-not-a-binary-shells-e2e-xyz"); res != session.ValidateCmdBad {
+		t.Fatalf("bad command: expected session.ValidateCmdBad, got %v (%v)", res, err)
 	}
 	t.Log("ValidateRemote E2E: OK/CWD-BAD/CMD-BAD all correct")
 }
 
 // TestValidateRemoteConnError: ssh unreachable (closed port) must surface as
-// validateConnError, never cwdBad/cmdBad — a connect failure must not block a
+// session.ValidateConnError, never cwdBad/cmdBad — a connect failure must not block a
 // spawn. Hermetic: no live sshd needed, connection is refused immediately.
 func TestValidateRemoteConnError(t *testing.T) {
 	if !hasSSH() {
@@ -74,8 +76,8 @@ func TestValidateRemoteConnError(t *testing.T) {
 		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "127.0.0.1", "root", 1,
 		"/tmp", "definitely-not-a-binary-xyz",
 	)
-	if res != validateConnError {
-		t.Fatalf("expected validateConnError, got %v", res)
+	if res != session.ValidateConnError {
+		t.Fatalf("expected session.ValidateConnError, got %v", res)
 	}
 	if err == nil {
 		t.Fatal("expected a non-nil error for an unreachable host")
@@ -86,8 +88,8 @@ func TestValidateRemoteConnError(t *testing.T) {
 func TestValidateRemoteInvalidConnID(t *testing.T) {
 	m := NewManager(testConfig(t.TempDir()))
 	res, err := m.ValidateRemote("not-a-uuid", "127.0.0.1", "root", 22, "/tmp", "")
-	if res != validateConnError {
-		t.Fatalf("expected validateConnError, got %v", res)
+	if res != session.ValidateConnError {
+		t.Fatalf("expected session.ValidateConnError, got %v", res)
 	}
 	if err == nil {
 		t.Fatal("expected a non-nil error for an invalid connection ID")
@@ -95,7 +97,7 @@ func TestValidateRemoteInvalidConnID(t *testing.T) {
 }
 
 // TestValidateRemoteNothingToValidate: no cwd and no bare command must return
-// validateOK WITHOUT any ssh round-trip (nonsense host would hang/refuse if it
+// session.ValidateOK WITHOUT any ssh round-trip (nonsense host would hang/refuse if it
 // tried to connect).
 func TestValidateRemoteNothingToValidate(t *testing.T) {
 	m := NewManager(testConfig(t.TempDir()))
@@ -104,8 +106,8 @@ func TestValidateRemoteNothingToValidate(t *testing.T) {
 			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "255.255.255.255", "root", 22,
 			"", command,
 		)
-		if res != validateOK {
-			t.Fatalf("command %q: expected validateOK, got %v", command, res)
+		if res != session.ValidateOK {
+			t.Fatalf("command %q: expected session.ValidateOK, got %v", command, res)
 		}
 		if err != nil {
 			t.Fatalf("command %q: expected nil err, got %v", command, err)
