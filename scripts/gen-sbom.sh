@@ -40,7 +40,7 @@ command -v "$GO" >/dev/null 2>&1 || { echo "error: $GO not found (set GO or PATH
 TOOLCHAIN=$("$GO" version | sed 's/^go version go//; s/[[:space:]].*//')
 [ -n "$TOOLCHAIN" ] || { echo "error: cannot determine Go toolchain version" >&2; exit 1; }
 
-NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+NOW=$(date -u +%Y-%m-%dT00:00:00Z) # date-granular: byte-identical output per UTC day
 SUPPLIER="Shells project"
 LICENSE="AGPL-3.0-or-later"
 COPYRIGHT="Copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles) <ragull@socket.cat>"
