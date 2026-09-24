@@ -392,3 +392,32 @@ func TestDestroyAllWaitsForChildExit(t *testing.T) {
 		t.Fatalf("onDestroy fired %d times, want %d", got, n)
 	}
 }
+
+func TestDestroyAllSkipsSessionAlreadyBeingDestroyed(t *testing.T) {
+	m, err := New(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.Create(80, 24, "exec sleep 30", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var destroyed atomic.Int32
+	m.OnDestroy(func(string) { destroyed.Add(1) })
+
+	// An in-flight op parks destroy() in its drain wait while the session
+	// is still registered, so DestroyAll sees it mid-destroy.
+	s.beginTermOp()
+	done := make(chan struct{})
+	go func() { m.Destroy(s.ID); close(done) }()
+	for !s.IsDestroyed() {
+		time.Sleep(time.Millisecond)
+	}
+	m.DestroyAll()
+	s.endTermOp()
+	<-done
+
+	if got := destroyed.Load(); got != 1 {
+		t.Fatalf("onDestroy fired %d times, want 1", got)
+	}
+}

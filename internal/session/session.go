@@ -466,13 +466,18 @@ func (m *Manager) DestroyAll() {
 		wg.Add(1)
 		go func(s *Session) {
 			defer wg.Done()
+			// A concurrent destroy() may already own this session: it kills
+			// and notifies, so only wait for the reap here.
 			s.mu.Lock()
+			owner := !s.destroyed
 			s.destroyed = true
 			s.mu.Unlock()
-			_ = s.Term.Kill()
-			s.waitForTermOps(termOpDrainWait)
+			if owner {
+				_ = s.Term.Kill()
+				s.waitForTermOps(termOpDrainWait)
+			}
 			<-s.exited // reaper confirms the child is dead (bounded by caller)
-			if m.onDestroy != nil {
+			if owner && m.onDestroy != nil {
 				m.onDestroy(s.ID)
 			}
 		}(s)

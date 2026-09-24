@@ -186,7 +186,7 @@ for target in $TARGETS; do
       "licenseConcluded": "BSD-3-Clause",
       "licenseDeclared": "BSD-3-Clause",
       "copyrightText": "NOASSERTION",
-      "comment": "Go toolchain ($GO version) that produced this binary; the statically linked Go standard library ships with it. There are no other components in the product."
+      "comment": "Go $TOOLCHAIN toolchain that produced this binary; the statically linked Go standard library ships with it. There are no other components in the product."
     }
   ],
   "relationships": [

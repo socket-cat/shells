@@ -86,6 +86,10 @@ else
     [ -f "$sbom" ] || continue
     sbom_found=1
     base=$(basename "$sbom")
+    grep -qF "\"name\": \"${base%.spdx.json}-${VERSION}\"" "$sbom" || {
+      echo "error: $sbom is not for ${VERSION} (stale?) — re-run scripts/gen-sbom.sh" >&2
+      exit 1
+    }
     expected=$( (cd dist && digest "$base") )
     tmp=$(mktemp "$CHECKSUMS.tmp.XXXXXX")
     # Match on the exact basename as the line's LAST whitespace field —
