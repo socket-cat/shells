@@ -30,7 +30,7 @@ exploitable vulnerabilities. If a fix slips, you get a status update at the
    never deleted).
 2. **Fix behind a test** — behavior changes ship with a test that fails on the
    vulnerable code.
-3. **Sec-audit the diff** — crypto/TLS, auth, input parsing, file paths,
+3. **Security-review the diff** — crypto/TLS, auth, input parsing, file paths,
    network listeners go through a security review of the change diff only.
 4. **Coordinated disclosure** — the fix ships in the next release; the release
    notes credit the reporter and describe the vulnerability after the fixed
@@ -43,6 +43,20 @@ operators own their deployment controls — TLS termination, reverse proxy,
 firewall allow-list, secret hygiene — the standard vendor-supplies-code /
 operator-runs-environment split. Hardening checklist for operators:
 `README.md` "Get started".
+
+## Security model (by design, not vulnerabilities)
+
+Shells is a **single-user** tool: whoever holds the E2E secret is the owner
+and already has a shell as the server user. Consequently:
+
+- **Session access** — any authenticated client can attach to any session.
+  Sessions are not scoped per client; run one instance per user.
+- **Folder browsing** — `/api/ls` lists any directory the server user can
+  read. It is not sandboxed, because the folder picker has to see everything
+  the shell can reach anyway.
+- **Secrets in memory** — key material is zeroed where Go allows it. Copies
+  held inside the Go standard library (e.g. TLS/AES state) cannot be zeroed.
+  This is a platform limitation.
 
 ## Cyber Resilience Act
 
