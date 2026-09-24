@@ -37,8 +37,6 @@ MODULE=$(sed -n 's/^module[[:space:]][[:space:]]*\([^[:space:]]*\).*/\1/p' go.mo
 
 GO=${GO:-go}
 command -v "$GO" >/dev/null 2>&1 || { echo "error: $GO not found (set GO or PATH)" >&2; exit 1; }
-TOOLCHAIN=$("$GO" version | sed 's/^go version go//; s/[[:space:]].*//')
-[ -n "$TOOLCHAIN" ] || { echo "error: cannot determine Go toolchain version" >&2; exit 1; }
 
 NOW=$(date -u +%Y-%m-%dT00:00:00Z) # date-granular: byte-identical output per UTC day
 SUPPLIER="Shells project"
@@ -117,6 +115,9 @@ for target in $TARGETS; do
 		echo "error: $bin missing — run the cross-compile block first (AGENTS.md)" >&2
 		exit 1
 	fi
+	# Toolchain that built THIS binary (CI may use another 1.24.x patch).
+	TOOLCHAIN=$("$GO" version "$bin" | sed 's/.*: go//')
+	[ -n "$TOOLCHAIN" ] || { echo "error: cannot read Go toolchain from $bin" >&2; exit 1; }
 	SHA=$(digest "$bin")
 	if [ -z "$SHA" ]; then
 		echo "error: no sha256 tool (sha256sum/shasum) available" >&2
