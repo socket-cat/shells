@@ -20,6 +20,11 @@
 // ShellSwitcher moved to window.ShellSwitcher in switcher.js
 
 // ── Swipe navigation for mobile ──
+// Documented exception (internal standards): this two-finger tracker is the third of
+// three pattern-similar gesture implementations (switcher.js,
+// keyboard-picker.js, here). They diverge deliberately (directions,
+// thresholds, excluded targets, touchcancel); unify only behind touch-QC
+// coverage.
 (function() {
   let touchStartX = 0;
   let touchStartY = 0;
@@ -142,7 +147,7 @@
   }, { passive: true });
 
   // ── Mobile Viewport / Keyboard Handling ──
-  if (window.visualViewport && window.ShellSessions && window.ShellSessions._isMobile()) {
+  if (window.visualViewport && window.ShellSessions && window.ShellSessions.isMobile()) {
     let vvRaf = null;
     let refitSettle = null;
     let lastVvWidth = null;
@@ -225,7 +230,7 @@
 
   function applyMobileLayout() {
     if (!window.ShellSessions || !window.ShellLayout) return;
-    const isMobile = window.ShellSessions._isMobile();
+    const isMobile = window.ShellSessions.isMobile();
     if (isMobile) {
       if (!savedDesktopLayout) savedDesktopLayout = window.ShellSessions.layoutMode;
       // +120 hysteresis: URL-bar / keyboard height flapping must not flip orientation.
@@ -305,7 +310,7 @@
     }
 
     function maybeShow() {
-      if (!window.ShellSessions || !window.ShellSessions._isMobile()) return;
+      if (!window.ShellSessions || !window.ShellSessions.isMobile()) return;
       const tick = setInterval(() => {
         if (window.ShellSessions._wsReady && window.ShellSessions.sessions.size > 0) {
           clearInterval(tick);

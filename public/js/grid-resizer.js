@@ -23,7 +23,7 @@ window.GridResizer = {
   threshold: 6,
 
   init() {
-    if (window.matchMedia('(max-width: 768px)').matches || ('ontouchstart' in window && window.innerWidth <= 768)) {
+    if (window.ShellSessions.isMobile()) {
       this.isEnabled = false;
       return;
     }

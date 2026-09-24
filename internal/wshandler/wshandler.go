@@ -31,12 +31,17 @@ import (
 )
 
 const (
-	msgTypeData         byte = 0
-	msgTypeControl      byte = 1
-	coalesceMs               = 8 * time.Millisecond
-	coalesceFlushBytes       = 32768
-	lockAllMinInterval       = 5 * time.Second
-	activitySigInterval      = time.Second
+	msgTypeData        byte = 0
+	msgTypeControl     byte = 1
+	coalesceMs              = 8 * time.Millisecond
+	coalesceFlushBytes      = 32768
+	lockAllMinInterval      = 5 * time.Second
+
+	// wsConnectsPerIP caps new WebSocket connects per minute per client IP.
+	// A normal single-admin client uses ~1-3 (including reconnects), so the
+	// limit only trips on pre-auth flood attempts trying to monopolize the
+	// global connection cap.
+	wsConnectsPerIP = 30
 )
 
 // attachState holds the per-(client,session) relay state.
@@ -53,11 +58,6 @@ type attachState struct {
 	sidBuf        []byte
 	cancelData    func()
 	cancelExit    func()
-}
-
-// activitySignalDue reports whether a paused-session activity heartbeat is due.
-func activitySignalDue(st *attachState, now time.Time) bool {
-	return st.lastActSig.IsZero() || now.Sub(st.lastActSig) >= activitySigInterval
 }
 
 // ClientConn is the per-WebSocket-connection state.
@@ -88,6 +88,10 @@ type Handler struct {
 
 	mu      sync.Mutex
 	clients map[*ClientConn]struct{}
+
+	// connLimiter bounds new WS connects per IP (see wsConnectsPerIP),
+	// mirroring the api package's per-IP limiters via the shared helper.
+	connLimiter *util.RateLimiter
 }
 
 // New creates a WS handler bound to the given config, session manager, and
@@ -100,11 +104,12 @@ func New(cfg *config.Config, mgr *session.Manager, authStore *auth.Store) *Handl
 		upgrader.CheckOrigin = authStore.HasAllowedOrigin
 	}
 	return &Handler{
-		cfg:      cfg,
-		manager:  mgr,
-		auth:     authStore,
-		clients:  make(map[*ClientConn]struct{}),
-		upgrader: upgrader,
+		cfg:         cfg,
+		manager:     mgr,
+		auth:        authStore,
+		clients:     make(map[*ClientConn]struct{}),
+		connLimiter: util.NewRateLimiter(),
+		upgrader:    upgrader,
 	}
 }
 
@@ -118,6 +123,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	if connCount >= 100 {
 		http.Error(w, "server busy", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Per-IP limit so one unauthenticated peer cannot open all 100 sockets
+	// before any auth handshake. The IP is derived exactly like the api
+	// package's limiters (proxy headers only when trustProxy).
+	ip := util.ClientIP(r, h.cfg.TrustProxy)
+	if !h.connLimiter.Allow(ip, wsConnectsPerIP, time.Minute) {
+		http.Error(w, "too many connection attempts", http.StatusTooManyRequests)
 		return
 	}
 
@@ -345,8 +359,8 @@ func (cc *ClientConn) onMessage(payload []byte, isBinary bool) {
 		sid := bytesToSid(plaintext[:16])
 		data := plaintext[16:]
 		s := cc.handler.manager.Get(sid)
-		if s != nil && !s.IsDestroyed() {
-			_, _ = s.Term.Write(data)
+		if s != nil {
+			_, _ = s.TryTermWrite(data) // no-op once destroyed
 		}
 		return
 	}
@@ -554,7 +568,7 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		if clampedRows == 0 {
 			clampedRows = 24
 		}
-		_ = s.Term.Resize(clampedCols, clampedRows)
+		_ = s.TryTermResize(clampedCols, clampedRows)
 		s.SetSize(clampedCols, clampedRows)
 	}
 
@@ -602,7 +616,12 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		if s.InAlternateScreen() {
 			cc.sendEncrypted([]byte("\x1b[?1049h"), st.sidBuf)
 		}
-		_ = s.Term.SignalWinch()
+		if !s.IsDestroyed() {
+			// Raw-fd ioctls: fast liveness check keeps the common path off a
+			// dead PTY; post-destroy ioctl on a closed fd just returns an
+			// error, never panics.
+			_ = s.Term.SignalWinch()
+		}
 	}
 
 	cc.mu.Unlock()
@@ -621,145 +640,6 @@ func (cc *ClientConn) handleAttach(sid string, msg map[string]any) {
 		ready, _ := json.Marshal(map[string]any{"type": "ready", "sid": sid})
 		cc.sendEncrypted(ready, nil)
 	})
-}
-
-// replayBuffer sends the session title (if set) and the buffered output
-// snapshot to a newly attached client, batching chunks into frames and
-// throttling into the client ring when the socket write queue exceeds WSHWM.
-//
-// The caller must already hold cc.mu (sendEncrypted does not touch cc.mu).
-func (cc *ClientConn) replayBuffer(sid string, s *session.Session, st *attachState) {
-	title := s.GetTitle()
-	defaultTitle := s.DefaultTitle
-	chunks := s.OutputSnapshot()
-
-	if len(chunks) == 0 && (title == "" || title == defaultTitle) {
-		return
-	}
-
-	var batch [][]byte
-	batchBytes := 0
-
-	if title != "" && title != defaultTitle {
-		t := []byte("\x1b]0;" + title + "\x07")
-		batch = append(batch, t)
-		batchBytes += len(t)
-	}
-
-	for _, chunk := range chunks {
-		batch = append(batch, chunk)
-		batchBytes += len(chunk)
-		if batchBytes > 32768 {
-			if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-				// Throttle: buffer the rest.  cc.mu is already held by the
-				// caller (handleAttach), so do not re-lock it here.
-				st.isThrottled = true
-				merged := concatBytes(batch)
-				st.clientBuffer.Push(merged, len(merged))
-				return
-			}
-			frame := concatBytes(batch)
-			cc.sendEncrypted(frame, st.sidBuf)
-			batch = batch[:0]
-			batchBytes = 0
-		}
-	}
-
-	if batchBytes > 0 {
-		frame := concatBytes(batch)
-		if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-			// cc.mu is already held by the caller (handleAttach).
-			st.isThrottled = true
-			st.clientBuffer.Push(frame, len(frame))
-		} else {
-			cc.sendEncrypted(frame, st.sidBuf)
-		}
-	}
-}
-
-// --- PTY data relay + coalescing ---
-
-func (cc *ClientConn) onPtyData(sid string, data []byte) {
-	if cc.closed.Load() {
-		return
-	}
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-
-	st, ok := cc.attached[sid]
-	if !ok {
-		return
-	}
-
-	if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-		st.isThrottled = true
-	}
-
-	if st.isPaused || st.isThrottled {
-		st.clientBuffer.Push(data, len(data))
-		if st.isPaused {
-			st.pausedBytes += len(data)
-			if activitySignalDue(st, time.Now()) {
-				sig, _ := json.Marshal(map[string]any{"type": "activity", "sid": sid, "bytes": st.pausedBytes})
-				cc.sendEncrypted(sig, nil)
-				st.pausedBytes = 0
-				st.lastActSig = time.Now()
-			}
-		}
-		return
-	}
-
-	st.coalesceBuf = append(st.coalesceBuf, data...)
-	if len(st.coalesceBuf) >= coalesceFlushBytes {
-		if st.coalesceTimer != nil {
-			st.coalesceTimer.Stop()
-			st.coalesceTimer = nil
-		}
-		cc.flushCoalesceLocked(sid, st)
-	} else if st.coalesceTimer == nil {
-		sidCopy := sid
-		st.coalesceTimer = time.AfterFunc(coalesceMs, func() {
-			cc.mu.Lock()
-			defer cc.mu.Unlock()
-			st2, ok := cc.attached[sidCopy]
-			if ok {
-				cc.flushCoalesceLocked(sidCopy, st2)
-			}
-		})
-	}
-}
-
-func (cc *ClientConn) flushCoalesceLocked(sid string, st *attachState) {
-	if len(st.coalesceBuf) == 0 {
-		st.coalesceTimer = nil
-		return
-	}
-	chunk := make([]byte, len(st.coalesceBuf))
-	copy(chunk, st.coalesceBuf)
-	st.coalesceBuf = st.coalesceBuf[:0]
-	st.coalesceTimer = nil
-
-	if !st.isPaused && !st.isThrottled {
-		cc.sendEncrypted(chunk, st.sidBuf)
-	} else {
-		st.clientBuffer.Push(chunk, len(chunk))
-	}
-}
-
-func (cc *ClientConn) flushClientBuffer(sid string) {
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-
-	st, ok := cc.attached[sid]
-	if !ok {
-		return
-	}
-	s := cc.handler.manager.Get(sid)
-	if s == nil || s.IsDestroyed() {
-		return
-	}
-
-	cc.flushClientBufferLocked(sid, st, s)
 }
 
 // --- detach / resize / claim-active ---
@@ -816,7 +696,7 @@ func (cc *ClientConn) handleResize(sid string, msg map[string]any) {
 		curCols, curRows := s.GetSize()
 		c := util.ClampInt(cols, curCols, 1, 500)
 		r := util.ClampInt(rows, curRows, 1, 200)
-		_ = s.Term.Resize(c, r)
+		_ = s.TryTermResize(c, r)
 		s.SetSize(c, r)
 		cc.handler.broadcastPtySize(sid, s, cc.ws)
 	}
@@ -842,60 +722,9 @@ func (cc *ClientConn) handleClaimActive(sid string, msg map[string]any) {
 	s.SetActiveWS(cc.ws)
 	c := util.ClampInt(cols, 80, 1, 500)
 	r := util.ClampInt(rows, 24, 1, 200)
-	_ = s.Term.Resize(c, r)
+	_ = s.TryTermResize(c, r)
 	s.SetSize(c, r)
 	cc.handler.broadcastPtySize(sid, s, cc.ws)
-}
-
-// --- backpressure ---
-
-func (cc *ClientConn) backpressureCheck() {
-	if cc.ws.BufferedAmount() > int64(cc.cfg.WSCWM) {
-		cc.ws.Close(1008, "Buffer exceeded limit")
-		return
-	}
-
-	if cc.ws.BufferedAmount() >= int64(cc.cfg.WSLWM) {
-		return
-	}
-
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-	for sid, st := range cc.attached {
-		if st.isThrottled && !st.isPaused {
-			s := cc.handler.manager.Get(sid)
-			if s != nil && !s.IsDestroyed() {
-				cc.flushClientBufferLocked(sid, st, s)
-			}
-		}
-	}
-}
-
-// flushClientBufferLocked flushes buffered output for a throttled session.
-//
-// It drains the per-client ring of *unsent* output as ordinary data frames —
-// never a destructive reset. The client's screen and scrollback stay intact;
-// the worst that happens on a saturated link is a transient gap of evicted
-// head bytes, which is strictly better than the old behaviour of wiping the
-// terminal and replaying the whole snapshot on every LWM crossing (that wiped
-// scrollback and caused a "redraw whole buffer again and again" storm).
-//
-// A reset+snapshot replay remains only on attach (replayBuffer), where it is
-// the legitimate "clear before replay to avoid duplicated old output" case.
-//
-// The caller must already hold cc.mu (sendEncrypted does not touch cc.mu).
-func (cc *ClientConn) flushClientBufferLocked(sid string, st *attachState, s *session.Session) {
-	for st.clientBuffer.Len() > 0 {
-		if cc.ws.BufferedAmount() > int64(cc.cfg.WSHWM) {
-			st.isThrottled = true
-			return
-		}
-		chunk := st.clientBuffer.Shift()
-		cc.sendEncrypted(chunk, st.sidBuf)
-	}
-	if cc.ws.BufferedAmount() < int64(cc.cfg.WSLWM) {
-		st.isThrottled = false
-	}
 }
 
 // --- encrypted send ---

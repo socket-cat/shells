@@ -49,6 +49,13 @@ const MaxPayload = 1024 * 1024
 // deadline. 60 s is 2× the keepalive interval, giving ample margin.
 const readDeadline = 60 * time.Second
 
+// maxPendingPongs caps pong frames queued-but-not-yet-written per connection.
+// Pings are keepalives: a client flooding pings gets at most this many pongs
+// in flight, so queue memory stays bounded and backpressure close limits
+// (WSCWM) cannot be reached by ping-flood enqueue alone. Drops are silent —
+// one fresh pong proves liveness just as well as a thousand.
+const maxPendingPongs = 2
+
 // Upgrader accepts an HTTP request and negotiates the WebSocket handshake.
 type Upgrader struct {
 	// CheckOrigin returns true if the request origin is allowed. When nil,
@@ -152,6 +159,21 @@ type Conn struct {
 	closing  bool
 	buffered atomic.Int64 // payload bytes queued, not yet on the wire
 
+	// pongsQueued counts pong frames currently sitting in the outbound
+	// queue; readLoop is their only producer (increment under queueMu),
+	// writeLoop their only consumer (decrement after flush). See
+	// maxPendingPongs.
+	pongsQueued atomic.Int32
+
+	// Close-frame flush tracking (RFC 6455 §5.5.1): closeQueued is set once
+	// an echo close frame is enqueued; closeSent is closed by writeLoop when
+	// that frame hits the wire — or can never do so. terminate waits bounded
+	// between the two before tearing down TCP, so peers actually receive the
+	// close handshake reply instead of a bare FIN/RST.
+	closeQueued   atomic.Bool
+	closeSent     chan struct{}
+	closeSentOnce sync.Once
+
 	// Public callbacks — set by the caller before Start.
 	OnMessage func(payload []byte, isBinary bool)
 	OnClose   func(code int, reason string)
@@ -159,7 +181,7 @@ type Conn struct {
 
 func newConn(conn net.Conn, br *bufio.Reader) *Conn {
 	setNoDelay(conn)
-	c := &Conn{conn: conn, br: br, done: make(chan struct{})}
+	c := &Conn{conn: conn, br: br, done: make(chan struct{}), closeSent: make(chan struct{})}
 	c.cond = sync.NewCond(&c.queueMu)
 	return c
 }
@@ -204,6 +226,20 @@ func (c *Conn) SendBinary(data []byte) bool { return c.send(data, OpBinary) }
 // SendPing enqueues a ping frame with the given payload (≤125 bytes).
 func (c *Conn) SendPing(payload []byte) bool { return c.send(payload, OpPing) }
 
+// handlePing answers a client ping by enqueueing one pong. Queued pongs are
+// capped at maxPendingPongs so a ping flood cannot grow the write queue
+// unboundedly; beyond the cap the pong is dropped (never a close) — pings
+// are keepalives, and the next delivered pong proves liveness equally well.
+// Only readLoop calls this, so the check-then-enqueue gate is serialized.
+func (c *Conn) handlePing(payload []byte) {
+	if c.pongsQueued.Load() >= maxPendingPongs {
+		return
+	}
+	if c.send(payload, OpPong) {
+		c.pongsQueued.Add(1)
+	}
+}
+
 func (c *Conn) send(payload []byte, op byte) bool {
 	if c.closed.Load() {
 		return false
@@ -222,7 +258,8 @@ func (c *Conn) send(payload []byte, op byte) bool {
 }
 
 // Close sends a close frame with the given status code and reason, then
-// terminates the connection.
+// flags the connection for termination once the frame has had its bounded
+// chance to reach the wire (see terminate).
 func (c *Conn) Close(code int, reason string) {
 	payload := make([]byte, 0, 2+len(reason))
 	payload = binary.BigEndian.AppendUint16(payload, uint16(code))
@@ -231,12 +268,17 @@ func (c *Conn) Close(code int, reason string) {
 		c.queueMu.Lock()
 		c.closing = true
 		c.queue = append(c.queue, encodeFrame(payload, OpClose))
+		c.closeQueued.Store(true)
 		c.queueMu.Unlock()
 		c.cond.Signal()
 	})
 }
 
-// writeLoop drains the outbound queue and writes frames to the socket.
+// closeSendWait bounds how long teardown may wait for a queued close frame
+// to be written (RFC 6455 §5.5.1 clean-close etiquette). A hostile or dead
+// peer therefore delays TCP teardown by at most this long.
+const closeSendWait = time.Second
+
 func (c *Conn) writeLoop() {
 	for {
 		c.queueMu.Lock()
@@ -250,8 +292,17 @@ func (c *Conn) writeLoop() {
 
 		for _, f := range frames {
 			if _, err := c.conn.Write(f); err != nil {
+				// The close frame can no longer be delivered: release any
+				// waiter in terminate immediately.
+				c.signalCloseSent()
 				c.terminate()
 				return
+			}
+			switch f[0] & 0x0f {
+			case OpPong:
+				c.pongsQueued.Add(-1)
+			case OpClose:
+				c.signalCloseSent()
 			}
 			c.buffered.Add(-payloadLenOf(f))
 		}
@@ -260,6 +311,12 @@ func (c *Conn) writeLoop() {
 			return
 		}
 	}
+}
+
+// signalCloseSent marks the queued close frame as written (or permanently
+// undeliverable), releasing terminate's bounded flush wait.
+func (c *Conn) signalCloseSent() {
+	c.closeSentOnce.Do(func() { close(c.closeSent) })
 }
 
 // payloadLenOf extracts the payload length from an encoded server frame.
@@ -298,7 +355,7 @@ func (c *Conn) readLoop() {
 		_ = c.conn.SetReadDeadline(time.Now().Add(readDeadline))
 		switch op {
 		case OpPing:
-			c.send(payload, OpPong)
+			c.handlePing(payload)
 		case OpPong:
 			// keepalive ack
 		case OpClose:
@@ -347,6 +404,17 @@ func (c *Conn) handleClose(code int, reason string) {
 func (c *Conn) terminate() {
 	if !c.closed.CompareAndSwap(false, true) {
 		return
+	}
+	// Bounded wait so the queued close frame reaches the wire before TCP
+	// teardown (unclean-close fix). Skipped when no close frame is pending,
+	// and capped at closeSendWait for stalled peers or dead sockets.
+	if c.closeQueued.Load() {
+		timer := time.NewTimer(closeSendWait)
+		select {
+		case <-c.closeSent:
+		case <-timer.C:
+		}
+		timer.Stop()
 	}
 	c.queueMu.Lock()
 	c.closing = true

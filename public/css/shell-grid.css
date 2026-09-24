@@ -41,10 +41,6 @@
   overflow: hidden;
 }
 
-.shell-tile {
-  order: 2; /* All tiles default to stack */
-}
-
 /* Master-Stack (Auto) — implicit rows like grid/columns layouts */
 #shell-grid[data-layout-mode="auto"] {
   grid-auto-rows: 1fr;
@@ -222,6 +218,7 @@
 
 /* ── Shell tile ── */
 .shell-tile {
+  order: 2; /* All tiles default to stack; is-master rules above raise it via specificity */
   background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: 0;
@@ -535,117 +532,7 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-.shell-tile.tile--busy .project-badge,
-.switcher-card.switcher-card--busy .project-badge {
+.shell-tile.tile--busy .project-badge {
   animation: shells-badge-pulse 1.4s ease-in-out infinite;
 }
 
-/* ── TUI Status Bar ── */
-.term-search-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 1200;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  background: var(--bg-raised);
-  border-bottom: 1px solid var(--border);
-  font-family: var(--font-mono);
-  box-sizing: border-box;
-}
-
-.term-search-bar input {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  padding: 3px 8px;
-  box-sizing: border-box;
-}
-
-.term-search-bar input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.term-search-bar button {
-  background: none;
-  border: 1px solid transparent;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 6px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.term-search-bar button:hover {
-  color: var(--text);
-  background: var(--border);
-}
-
-.term-search-bar .tsb-toggle.active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.term-search-bar .tsb-count {
-  color: var(--text-muted);
-  font-size: 10px;
-  min-width: 44px;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.term-search-bar .tsb-close {
-  color: var(--text-muted);
-  font-size: 14px;
-}
-.tui-status-bar {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 32px; /* Slightly taller for easier clicking on mobile */
-  line-height: 32px;
-  background: #000;
-  color: #fff;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 0 12px;
-  z-index: 2000; /* Higher than cmd-bar (1000) and other UI elements */
-  display: flex;
-  align-items: center;
-  pointer-events: auto;
-  cursor: pointer;
-  border-top: 1px solid var(--border-subtle);
-  animation: tui-slide-up 0.2s ease-out;
-  transition: filter 0.1s ease-in-out;
-}
-
-.tui-status-bar:hover {
-  filter: brightness(1.2);
-}
-
-.tui-status-bar.error {
-  background: #800;
-  color: #fff;
-}
-
-.tui-status-bar.info {
-  background: #005f87;
-  color: #fff;
-}
-
-@keyframes tui-slide-up {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
-}

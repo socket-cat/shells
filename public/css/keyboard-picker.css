@@ -1,0 +1,104 @@
+/**
+ * @author Carles Ortega Ragull <ragull@socket.cat> (https://socket.cat)
+ * @copyright (c) 2026 Carles Ortega Ragull (ragull, socat, carles)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* ── Mobile Keyboard Picker ── */
+#keyboard-overlay {
+  padding: 0 !important;
+  align-items: flex-start !important;
+}
+
+#keyboard-overlay .tui-dialog {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  border: none !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+
+.keyboard-mod-row {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.keyboard-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.key-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 2px 1px;
+  background: rgba(250, 178, 131, 0.05);
+  border: none !important;
+  border-radius: 0 !important;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.key-btn:active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.key-modifier {
+  flex: 1;
+  font-weight: var(--weight-bold);
+  background: rgba(250, 178, 131, 0.1);
+}
+
+.key-modifier-active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.keyboard-combo-section {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 4px;
+}
+
+.keyboard-combo-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 3px;
+}
+
+.keyboard-combo-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px;
+}
+
+.key-combo-btn {
+  font-size: 9px;
+  min-height: 28px;
+  padding: 2px 0;
+}

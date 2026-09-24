@@ -50,11 +50,14 @@ var NonReplayableDecModes = map[string]bool{
 
 // Config bundles every resolved setting.
 type Config struct {
-	Port                  int
-	KeepaliveIntervalMs   int
-	MaxSessions           int
-	MaxClientsPerSession  int
-	AppToken              string
+	Port                 int
+	KeepaliveIntervalMs  int
+	MaxSessions          int
+	MaxClientsPerSession int
+	AppToken             string
+	// TokenSource is where AppToken came from ("env" or "generated"), for
+	// operator-facing logs that must not carry any substring of the token.
+	TokenSource           string
 	Secret                string
 	SecretFile            string
 	SecretSource          string
@@ -143,8 +146,16 @@ func Load(version string) (*Config, error) {
 		c.Cwd = "/"
 	}
 
-	// App token (random when not supplied via env).
-	c.AppToken = firstNonEmpty(os.Getenv("SHELLS_TOKEN"), randomHex(24))
+	// App token: taken from $SHELLS_TOKEN when set, otherwise generated
+	// randomly per launch. TokenSource records which, so the startup log can
+	// point operators to the origin without ever printing a token substring.
+	if env := os.Getenv("SHELLS_TOKEN"); env != "" {
+		c.AppToken = env
+		c.TokenSource = "env"
+	} else {
+		c.AppToken = randomHex(24)
+		c.TokenSource = "generated"
+	}
 
 	// Key directory.
 	c.ServerKeyDir = firstNonEmpty(

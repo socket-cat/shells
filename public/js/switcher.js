@@ -66,6 +66,10 @@ window.ShellSwitcher = {
     cards.className = 'switcher-cards';
 
     // Brand header: [logo + app name] top-left, [version + socket.cat] top-right.
+    // Documented exception (internal standards): pattern-similar to TuiDialog's
+    // _createBrandBar but a visually distinct component (different DOM shape
+    // + stylesheet); unifying is deferred until visual-regression tooling
+    // exists.
     const brand = document.createElement('div');
     brand.className = 'switcher-brand';
 
@@ -135,22 +139,7 @@ window.ShellSwitcher = {
           const shellId = String(id);
           const titleText = tileTitle ? tileTitle.textContent : `shell #${shellId}`;
           
-          const message = document.createElement('div');
-          message.style.lineHeight = '1.4';
-          message.appendChild(document.createTextNode('Permanently destroy:'));
-          message.appendChild(document.createElement('br'));
-          const strong = document.createElement('strong');
-          strong.style.color = 'var(--text)';
-          strong.textContent = titleText;
-          message.appendChild(strong);
-          message.appendChild(document.createTextNode('?'));
-
-          TuiDialog.confirm('Destroy Shell', message, {
-            dangerous: true,
-            confirmText: 'Yes, destroy',
-            size: 'small',
-            onConfirm: () => { window.ShellSessions.destroy(shellId); },
-          });
+          window.TuiDialog.confirmDestroy(shellId, titleText);
         }, 220);
       });
 
@@ -183,7 +172,7 @@ window.ShellSwitcher = {
       card.addEventListener('click', () => {
         window.ShellSessions.setActive(id);
         this.hide();
-        if (window.ShellSessions._isMobile()) {
+        if (window.ShellSessions.isMobile()) {
           const tile = window.ShellSessions.sessions.get(id)?.tile;
           // The active tile is usually already fullscreen via
           // _ensureFullscreenMobile; only force it when it is not (single

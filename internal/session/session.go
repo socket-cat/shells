@@ -52,6 +52,15 @@ var ErrCommandNotFound = errors.New("command not found")
 // oscText cap.
 const maxCarry = 4096
 
+// termOpDrainWait bounds destroy's wait for in-flight guarded PTY ops
+// (see Session.termOps), so a stalled write can never hang Destroy.
+const termOpDrainWait = 500 * time.Millisecond
+
+// destroyAllGrace is the SINGLE shared deadline for DestroyAll's wait on all
+// killed children to be reaped (sessions are killed concurrently, so 200
+// sessions cost ~one drain + this grace — not per-session sums).
+const destroyAllGrace = 2 * time.Second
+
 // Session represents one live terminal.
 type Session struct {
 	ID           string
@@ -71,11 +80,27 @@ type Session struct {
 	activeModes  map[string]bool
 	streamParser *stream.Parser
 	destroyed    bool
+	// Guarded Term ops (TryTermWrite/TryTermResize) take NO lock
+	// across the PTY syscall — a blocked write can therefore never wedge
+	// destroy. The guard is a fast `destroyed` check plus error tolerance:
+	// destroy sets `destroyed` under a short s.mu critical section, releases,
+	// then SIGKILLs the child so in-flight writes unwind with ErrClosed/EIO
+	// as the slave closes. A write parked on a full PTY input buffer may not
+	// wake; it strands one goroutine bounded by flood size. termOps counts
+	// ops still executing; destroy bounds-drains it (termOpDrainWait) and
+	// proceeds regardless of pathological stalls.
+	termOps int
 	// carry holds the trailing bytes of a partially-received escape sequence
 	// (parser not back in the ground state). It is prepended to the next
 	// chunk before pushing to outputBuffer so replayed chunks never start
 	// mid-sequence. Only touched from the session's OnData goroutine.
 	carry []byte
+
+	// exited is closed by the Term reaper (OnExit subscriber registered in
+	// Create) once the child process has been fully waited-for. Shutdown's
+	// DestroyAll awaits it under a global deadline so SIGKILLed PTY children
+	// are confirmed dead before process exit proceeds.
+	exited chan struct{}
 
 	// Set by wshandler to identify the active (foreground) client for this
 	// session — the one whose dimensions are applied to the PTY. Compared by
@@ -96,7 +121,23 @@ type Manager struct {
 	// SpawnSSH, if set, launches an SSH-backed terminal. Set by the ssh
 	// package after registration to avoid an import cycle.
 	SpawnSSH func(backend *Backend, cols, rows int, command, cwd string) (*pty.Term, string, string, error)
+
+	// SSHValidate, if set, validates the remote cwd / bare command before an
+	// SSH spawn. Set by the ssh package after registration to avoid an import
+	// cycle. ValidateConnError must NOT block the spawn.
+	SSHValidate func(backend *Backend, command, cwd string) (ValidateResult, error)
 }
+
+// ValidateResult reports the outcome of validating a remote cwd / command
+// before an SSH spawn.
+type ValidateResult int
+
+const (
+	ValidateOK ValidateResult = iota
+	ValidateCwdBad
+	ValidateCmdBad
+	ValidateConnError
+)
 
 // New creates a Manager bound to the given configuration.
 func New(cfg *config.Config) (*Manager, error) {
@@ -158,6 +199,24 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		}
 		if backend.Host == "" || backend.User == "" {
 			return nil, fmt.Errorf("SSH backend requires host and user")
+		}
+		// Validate the remote cwd and bare command BEFORE spawn so a bogus
+		// folder/binary fails loudly (typed error → modal + recents prune)
+		// instead of printing into the terminal and contaminating recents.
+		// ValidateConnError (ssh itself unreachable) never blocks — the picker
+		// already proved connectivity and spawn would fail loudly anyway.
+		if m.SSHValidate != nil {
+			res, verr := m.SSHValidate(backend, command, cwd)
+			if verr != nil {
+				log.Printf("ssh: validate: %v — proceeding with spawn", verr)
+			} else {
+				switch res {
+				case ValidateCwdBad:
+					return nil, fmt.Errorf("%w: %q: not a directory", ErrCwdUnusable, cwd)
+				case ValidateCmdBad:
+					return nil, fmt.Errorf("%w: %q", ErrCommandNotFound, command)
+				}
+			}
 		}
 		t, dir, ttl, err := m.SpawnSSH(backend, cols, rows, command, cwd)
 		if err != nil {
@@ -240,6 +299,7 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		CreatedAt:    time.Now().UnixMilli(),
 		outputBuffer: ringbuf.New(m.cfg.OutputBufferMax),
 		activeModes:  make(map[string]bool),
+		exited:       make(chan struct{}),
 	}
 	s.streamParser = stream.New(
 		func(mode string, isSet bool) {
@@ -317,6 +377,13 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		m.destroy(s)
 	})
 
+	// Reap-signal for the shutdown path: fired once cmd.Wait has returned,
+	// i.e. the child is confirmed dead. dispatchExit supports multiple
+	// subscribers, so this runs alongside the auto-destroy hook above.
+	term.OnExit(func(int, string) {
+		close(s.exited)
+	})
+
 	m.mu.Lock()
 	// Re-check: another Create may have filled the gap while we spawned.
 	if len(m.sessions) >= m.cfg.MaxSessions {
@@ -346,6 +413,7 @@ func (m *Manager) Destroy(id string) bool {
 }
 
 func (m *Manager) destroy(s *Session) bool {
+	// Short critical section only — never held across a PTY syscall.
 	s.mu.Lock()
 	if s.destroyed {
 		s.mu.Unlock()
@@ -354,7 +422,9 @@ func (m *Manager) destroy(s *Session) bool {
 	s.destroyed = true
 	s.mu.Unlock()
 
+	// SIGKILL unwinds in-flight writes; the drain is bounded (see termOps).
 	_ = s.Term.Kill()
+	s.waitForTermOps(termOpDrainWait)
 
 	m.mu.Lock()
 	delete(m.sessions, s.ID)
@@ -367,6 +437,8 @@ func (m *Manager) destroy(s *Session) bool {
 }
 
 // DestroyAll kills every live session (used during graceful shutdown).
+// Sessions are killed concurrently and each child's reap is awaited under
+// one shared deadline (destroyAllGrace), not a per-session sum.
 func (m *Manager) DestroyAll() {
 	m.mu.Lock()
 	all := make([]*Session, 0, len(m.sessions))
@@ -375,18 +447,104 @@ func (m *Manager) DestroyAll() {
 	}
 	m.sessions = make(map[string]*Session)
 	m.mu.Unlock()
+
+	var wg sync.WaitGroup
 	for _, s := range all {
-		s.mu.Lock()
-		s.destroyed = true
-		s.mu.Unlock()
-		_ = s.Term.Kill()
-		if m.onDestroy != nil {
-			m.onDestroy(s.ID)
-		}
+		wg.Add(1)
+		go func(s *Session) {
+			defer wg.Done()
+			// A concurrent destroy() may already own this session: it kills
+			// and notifies, so only wait for the reap here.
+			s.mu.Lock()
+			owner := !s.destroyed
+			s.destroyed = true
+			s.mu.Unlock()
+			if owner {
+				_ = s.Term.Kill()
+				s.waitForTermOps(termOpDrainWait)
+			}
+			<-s.exited // reaper confirms the child is dead (bounded by caller)
+			if owner && m.onDestroy != nil {
+				m.onDestroy(s.ID)
+			}
+		}(s)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(destroyAllGrace):
+		// Grace exhausted: stragglers are SIGKILLed and their reap finishes
+		// asynchronously; proceed with shutdown as designed.
 	}
 }
 
 // --- Session accessors (thread-safe) ---
+
+// errDestroyed is returned by TryTermWrite/TryTermResize when the session has
+// been destroyed and its PTY may be closing or closed.
+var errDestroyed = errors.New("session destroyed")
+
+// beginTermOp registers an in-flight guarded PTY op. It returns false once
+// the session is destroyed, in which case no registration happens.
+func (s *Session) beginTermOp() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.destroyed {
+		return false
+	}
+	s.termOps++
+	return true
+}
+
+// endTermOp deregisters an op registered via beginTermOp.
+func (s *Session) endTermOp() {
+	s.mu.Lock()
+	s.termOps--
+	s.mu.Unlock()
+}
+
+// waitForTermOps bounds-waits for in-flight guarded PTY ops to finish, then
+// returns even if some are still executing — SIGKILL unblocks most writers,
+// and destroy must never wait unboundedly on the pathological remainder.
+func (s *Session) waitForTermOps(max time.Duration) {
+	deadline := time.Now().Add(max)
+	for {
+		s.mu.Lock()
+		n := s.termOps
+		s.mu.Unlock()
+		if n == 0 || !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TryTermWrite writes to the PTY unless the session is destroyed. No lock is
+// held across the write, so it can never wedge Destroy (see termOps).
+func (s *Session) TryTermWrite(data []byte) (int, error) {
+	if !s.beginTermOp() {
+		return 0, errDestroyed
+	}
+	n, err := s.Term.Write(data)
+	s.endTermOp()
+	return n, err
+}
+
+// TryTermResize resizes the PTY unless the session is destroyed (see
+// TryTermWrite).
+func (s *Session) TryTermResize(cols, rows int) error {
+	if !s.beginTermOp() {
+		return errDestroyed
+	}
+	err := s.Term.Resize(cols, rows)
+	s.endTermOp()
+	return err
+}
 
 func (s *Session) IsDestroyed() bool {
 	s.mu.Lock()
