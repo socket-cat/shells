@@ -15,12 +15,14 @@
 package selfupdate
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -64,7 +66,7 @@ func Run() {
 	}
 	logPath := os.Getenv("LOG") // empty → child inherits stdio, parent logs to stderr
 	crashLimit := config.EnvInt("CRASH_LIMIT", 3)
-	testPort := config.EnvInt("TEST_PORT", 8099)
+	testPort := config.EnvInt("TEST_PORT", 0) // 0: a free port per pre-flight
 
 	logf := makeLogger(logPath)
 
@@ -73,8 +75,10 @@ func Run() {
 
 	crashes := 0
 	startFails := 0
+	refused := false // last update was rejected; tell the next child (→ /api/health)
 	for {
-		child, err := startChild(binary, logPath)
+		child, err := startChild(binary, logPath, refused)
+		refused = false
 		if err != nil {
 			startFails++
 			logf("failed to start %s (%d/%d): %v", binary, startFails, crashLimit, err)
@@ -110,6 +114,7 @@ func Run() {
 			if !verifyStaged(binary) {
 				logf("staged binary failed verification; keeping current")
 				removeStaged(binary)
+				refused = true
 			} else if preflight(binary+".new", testPort, logPath) {
 				swap(binary, logf)
 				_ = os.Remove(binary + ".new.sha256")
@@ -117,6 +122,7 @@ func Run() {
 			} else {
 				logf("staged binary failed pre-flight; keeping current")
 				removeStaged(binary)
+				refused = true
 			}
 		case 0:
 			crashes = 0
@@ -135,9 +141,12 @@ func Run() {
 
 // startChild launches the server child: same env minus the child marker, with
 // SHELLS_BINARY_PATH set so the child stages updates next to the right binary.
-func startChild(binary, logPath string) (*exec.Cmd, error) {
+func startChild(binary, logPath string, refused bool) (*exec.Cmd, error) {
 	cmd := exec.Command(binary)
 	cmd.Env = childEnv(binary)
+	if refused {
+		cmd.Env = append(cmd.Env, "SHELLS_UPDATE_REFUSED=1")
+	}
 	if logPath != "" {
 		if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			cmd.Stdout = f
@@ -223,11 +232,15 @@ func removeStaged(binary string) {
 	_ = os.Remove(binary + ".new.sha256")
 }
 
-// preflight boots the staged binary on testPort and probes /api/health for up
-// to ~10s, then stops it. Returns true only if health reports OK.
+// preflight boots the staged binary on testPort (0 = a free port picked now:
+// any fixed default eventually collides with something else on the host) and
+// probes /api/health for up to ~10s, then stops it. True only if health is OK.
 func preflight(newBin string, testPort int, logPath string) bool {
 	if !fileExists(newBin) {
 		return false
+	}
+	if testPort == 0 {
+		testPort = freePort()
 	}
 	cmd := exec.Command(newBin)
 	cmd.Env = childEnv(newBin)
@@ -264,14 +277,28 @@ func preflight(newBin string, testPort int, logPath string) bool {
 	for i := 0; i < 20; i++ {
 		resp, err := client.Get(url)
 		if err == nil {
+			// Our own health JSON, not just any 200: another server that
+			// happens to answer on the port must never pass for the new binary.
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			if resp.StatusCode == http.StatusOK && bytes.Contains(body, []byte(`"status":"healthy"`)) {
 				return true
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return false
+}
+
+// freePort asks the OS for an unused TCP port (released immediately; the
+// staged child binds it a moment later).
+func freePort() int {
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return 8099
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
 }
 
 func swap(binary string, logf func(string, ...any)) {

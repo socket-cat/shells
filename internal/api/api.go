@@ -102,6 +102,10 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// PWA's post-update check matches in dev exactly as in production.
 		"version":     "v" + h.cfg.Version + os.Getenv("SHELLS_DEV_TAG"),
 		"maxSessions": h.cfg.MaxSessions,
+		// The supervisor rejected the last staged update (verification or
+		// pre-flight): the page says so instead of waiting for a version
+		// that will never arrive.
+		"updateRefused": os.Getenv("SHELLS_UPDATE_REFUSED") == "1",
 	}, nil)
 }
 

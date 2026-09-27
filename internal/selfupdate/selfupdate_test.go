@@ -6,6 +6,8 @@ package selfupdate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,5 +131,51 @@ func TestEnvInt(t *testing.T) {
 	os.Unsetenv("SUP_X")
 	if config.EnvInt("SUP_X", 3) != 3 {
 		t.Error("envInt should use the default when unset")
+	}
+}
+
+// TestMain doubles as a fake "staged server" for TestPreflightFreePort: when
+// re-executed with PREFLIGHT_HELPER=1 it only answers /api/health on $PORT,
+// so pre-flight is exercised end to end without ever booting the real app.
+func TestMain(m *testing.M) {
+	if os.Getenv("PREFLIGHT_HELPER") == "1" {
+		http.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(`{"status":"healthy"}`)) })
+		_ = http.ListenAndServe(":"+os.Getenv("PORT"), nil)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
+// TestPreflightFreePort: with no TEST_PORT, pre-flight must not depend on a
+// fixed port — the old default 8099 collided with an unrelated `php -S` and
+// every update was refused.
+func TestPreflightFreePort(t *testing.T) {
+	if l, err := net.Listen("tcp", ":8099"); err == nil { // occupy it (or it already is)
+		defer l.Close()
+	}
+	t.Setenv("PREFLIGHT_HELPER", "1")
+	t.Setenv("SHELLS_TLS", "off")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preflight(self, 0, "") {
+		t.Fatal("pre-flight failed with 8099 taken: it must pick a free port")
+	}
+}
+
+// TestPreflightRejectsForeignServer: a different server answering 200 on the
+// pre-flight port must not pass for the staged binary.
+func TestPreflightRejectsForeignServer(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("<html>ok</html>")) }))
+	defer l.Close()
+	t.Setenv("SHELLS_TLS", "off")
+	// /bin/true exits at once: only the foreign server is left answering.
+	if preflight("/bin/true", l.Addr().(*net.TCPAddr).Port, "") {
+		t.Fatal("pre-flight accepted a foreign server's 200 as the staged binary")
 	}
 }

@@ -206,12 +206,21 @@ window.pwaReloadAfterUpdate = async function pwaReloadAfterUpdate(target) {
     const tick = async () => {
       const h = await healthJson();
       if (h && bareV(h.version) === bareV(target)) return resolve(true);
+      if (h && h.updateRefused) return resolve(h); // back up, but on the old version
       tries += 1;
       if (tries >= 50) return resolve(false); // ~25s cap
       setTimeout(tick, 500);
     };
     tick();
   });
+  if (up && up !== true) {
+    if (window.TuiDialog && window.TuiDialog.alert) {
+      window.TuiDialog.alert('Update not installed',
+        `v${bareV(target)} failed its startup check, so the server kept v${bareV(up.version)}. ` +
+        'Nothing else changed; details are in the server log.');
+    }
+    return;
+  }
   if (!up) {
     if (window.TuiDialog && window.TuiDialog.toast) {
       window.TuiDialog.toast("Server is taking long to restart — use Force reload when it's back", 'warning');
