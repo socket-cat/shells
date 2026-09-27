@@ -22,6 +22,7 @@ import (
 func testFS() *fstest.MapFS {
 	return &fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte(`<!DOCTYPE html><html><head><title>{{APP_NAME}}</title></head><body></body></html>`)},
+		"app.js":     &fstest.MapFile{Data: []byte(`console.log(1)`)},
 	}
 }
 
@@ -169,5 +170,31 @@ func TestInjectSRIMatchesRegexSpec(t *testing.T) {
 		if !strings.Contains(tag, "integrity=") {
 			t.Errorf("no integrity: %s", tag)
 		}
+	}
+}
+
+// TestETagRevalidation: a cached asset answers If-None-Match with a bodyless
+// 304, and a changed/unknown tag gets the full body.
+func TestETagRevalidation(t *testing.T) {
+	h := newTestHandler(t, "#fab283")
+	get := func(inm string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/app.js", nil)
+		if inm != "" {
+			r.Header.Set("If-None-Match", inm)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	first := get("")
+	etag := first.Header().Get("ETag")
+	if first.Code != 200 || !strings.HasPrefix(etag, `W/"sha256-`) {
+		t.Fatalf("first GET: code %d etag %q", first.Code, etag)
+	}
+	if w := get(etag); w.Code != 304 || w.Body.Len() != 0 {
+		t.Fatalf("revalidate: code %d body %d, want 304 empty", w.Code, w.Body.Len())
+	}
+	if w := get(`W/"sha256-stale"`); w.Code != 200 {
+		t.Fatalf("stale tag: code %d, want 200", w.Code)
 	}
 }

@@ -458,8 +458,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
+	case h.assets[reqPath] != nil && r.URL.Query().Get("v") == h.version:
+		// ?v=<version> URLs change with every build: never revalidate.
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	case h.assets[reqPath] != nil && ext != ".woff2":
 		w.Header().Set("Cache-Control", "no-cache")
+	}
+
+	// Revalidation: the SRI hash is the content's identity, so "no-cache"
+	// reloads cost a 304 instead of the full body. Weak because the gzip and
+	// identity encodings share it.
+	if hash := h.hashes[reqPath]; hash != "" && h.assets[reqPath] != nil {
+		etag := `W/"` + hash + `"`
+		w.Header().Set("ETag", etag)
+		if strings.Contains(r.Header.Get("If-None-Match"), etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 	}
 
 	// gzip (pre-compressed at startup).
