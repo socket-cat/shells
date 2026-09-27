@@ -59,7 +59,7 @@ with TLS (the PWA needs HTTPS).
 
 ## Build from source
 
-Requires Go 1.24+. Most users don't need this — grab the prebuilt binary above.
+Requires Go 1.26+. Most users don't need this — grab the prebuilt binary above.
 
 ```bash
 scripts/build.sh shells

@@ -115,7 +115,7 @@ for target in $TARGETS; do
 		echo "error: $bin missing — run the cross-compile block first (AGENTS.md)" >&2
 		exit 1
 	fi
-	# Toolchain that built THIS binary (CI may use another 1.24.x patch).
+	# Toolchain that built THIS binary (go.mod pins it via the toolchain directive).
 	TOOLCHAIN=$("$GO" version "$bin" | sed 's/.*: go//')
 	[ -n "$TOOLCHAIN" ] || { echo "error: cannot read Go toolchain from $bin" >&2; exit 1; }
 	SHA=$(digest "$bin")
