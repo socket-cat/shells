@@ -235,6 +235,7 @@ window._dispatchTerminalMouse = function(term, type, clientX, clientY, buttons) 
     clientY: sc.clientY,
     button: 0,
     buttons,
+    detail: 1, // xterm's selection switches on click count; 0 = ignored
     bubbles: true,
     cancelable: true,
   }));
@@ -1354,8 +1355,28 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         }
         return false;
       }
+      // Ctrl+Shift+C: copy selection (Chrome/Edge otherwise open DevTools inspector)
+      if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC') {
+        e.preventDefault();
+        if (e.type === 'keydown' && term.hasSelection()) {
+          navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        }
+        return false;
+      }
       return true;
     });
+
+    // X11-style primary selection: select copies, middle-click pastes (shared across tiles)
+    term.onSelectionChange(() => { if (term.hasSelection()) this._primarySel = term.getSelection(); });
+    const onMiddle = (e) => {
+      if (e.button !== 1) return;
+      const mm = term.modes && term.modes.mouseTrackingMode;
+      if (mm && mm !== 'none' && !e.shiftKey) return; // mouse-aware TUI gets the click
+      e.preventDefault(); // blocks Windows autoscroll + browser's native Linux primary paste (would double)
+      if (e.type === 'mousedown' && this._primarySel) term.paste(this._primarySel);
+    };
+    body.addEventListener('mousedown', onMiddle, true);
+    body.addEventListener('mouseup', onMiddle, true);
 
     const gestureLayer = document.createElement('div');
     gestureLayer.className = 'mobile-gesture-layer';
@@ -1367,6 +1388,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         if (textarea) {
           textarea.setAttribute('autocapitalize', 'none');
           textarea.focus = () => {};
+          // xterm treats Android as Linux: every selection runs textarea.select() (primary-selection hook), which focuses natively and toggles the keyboard
+          textarea.select = () => {};
           _realFocus = () => { textarea.blur(); HTMLElement.prototype.focus.call(textarea); };
         }
       }
@@ -1394,8 +1417,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           if (!touchGesture.active || touchGesture.mode !== 'tap') return;
           touchGesture.allowNativeSelection = true; touchGesture.mode = 'select';
           gestureLayer.classList.add('selection-mode');
-          const target = term.element?.querySelector('.xterm-screen') || term.element;
-          if (target) target.dispatchEvent(new MouseEvent('mousedown', { clientX: touch.clientX, clientY: touch.clientY, button: 0, buttons: 1, bubbles: true, cancelable: true }));
+          window._dispatchTerminalMouse(term, 'mousedown', touch.clientX, touch.clientY, 1);
         }, 450);
       }, { capture: true, passive: false });
 
@@ -1404,9 +1426,10 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         const touch = e.touches[0];
         const dx = touch.clientX - touchGesture.startX;
         const dy = touch.clientY - touchGesture.startY;
-        if (touchGesture.allowNativeSelection) return;
         e.preventDefault(); e.stopPropagation();
         window.ShellSessions._scaleCoordSid = id;
+        // Touch events stay bound to the gesture layer, so drive xterm's drag-select by hand
+        if (touchGesture.allowNativeSelection) { window._dispatchTerminalMouse(term, 'mousemove', touch.clientX, touch.clientY, 1); return; }
         if (touchGesture.mode === 'tap') {
           if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
           clearTimeout(touchGesture.longPressTimer);
@@ -1425,8 +1448,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         if (touchGesture.allowNativeSelection) {
           e.preventDefault(); e.stopPropagation();
           const touch = e.changedTouches[0];
-          const target = term.element?.querySelector('.xterm-screen') || term.element;
-          if (target && touch) target.dispatchEvent(new MouseEvent('mouseup', { clientX: touch.clientX, clientY: touch.clientY, button: 0, buttons: 0, bubbles: true, cancelable: true }));
+          if (touch) window._dispatchTerminalMouse(term, 'mouseup', touch.clientX, touch.clientY, 0);
+          // No native copy menu over a canvas: copy on release (touchend is a user gesture)
+          if (term.hasSelection()) navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
           resetTouchGesture(); return;
         }
         e.preventDefault(); e.stopPropagation();
@@ -1445,6 +1469,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
             touchGesture.lastTapX = touch.clientX;
             touchGesture.lastTapY = touch.clientY;
           }
+          window._dispatchTerminalMouse(term, 'mousemove', touch.clientX, touch.clientY, 0); // hover first: web-links only activates a link it saw under the pointer
           window._dispatchTerminalMouse(term, 'mousedown', touch.clientX, touch.clientY, 1);
           window._dispatchTerminalMouse(term, 'mouseup', touch.clientX, touch.clientY, 0);
           window._dispatchTerminalMouse(term, 'click', touch.clientX, touch.clientY, 0);

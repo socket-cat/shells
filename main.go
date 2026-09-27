@@ -98,7 +98,8 @@ func main() {
 
 	brand := branding.Load(cfg.BrandingFile, cfg.AppName, cfg.Accent)
 
-	staticH, err := static.New(subFS, version, cfg.ServerKeyDir, cfg.Accent, cfg.AppName, brand)
+	// SHELLS_DEV_TAG (dev deploys only) busts ?v= + the SW cache per build; unset in production
+	staticH, err := static.New(subFS, version+os.Getenv("SHELLS_DEV_TAG"), cfg.ServerKeyDir, cfg.Accent, cfg.AppName, brand)
 	if err != nil {
 		log.Fatalf("static: %v", err)
 	}
