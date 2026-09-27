@@ -97,8 +97,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	util.SendJSON(w, 200, map[string]any{
-		"status":      "healthy",
-		"version":     "v" + h.cfg.Version,
+		"status": "healthy",
+		// Same version the page shows (static gets the dev tag too), so the
+		// PWA's post-update check matches in dev exactly as in production.
+		"version":     "v" + h.cfg.Version + os.Getenv("SHELLS_DEV_TAG"),
 		"maxSessions": h.cfg.MaxSessions,
 	}, nil)
 }
