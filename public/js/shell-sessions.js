@@ -1355,6 +1355,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         }
         return false;
       }
+      // App shortcuts (app.js, window keydown) must not also reach the shell: xterm sees them first,
+      // e.g. Alt+N would send ESC n (readline history search) and swallow the next typed line
+      if ((e.altKey && !e.ctrlKey && ['KeyN', 'KeyQ', 'ArrowLeft', 'ArrowRight'].includes(e.code))
+        || (e.ctrlKey && !e.altKey && (e.code === 'Tab' || (e.code === 'KeyF' && searchAddon)))) {
+        return false;
+      }
       // Ctrl+Shift+C: copy selection (Chrome/Edge otherwise open DevTools inspector)
       if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC') {
         e.preventDefault();
