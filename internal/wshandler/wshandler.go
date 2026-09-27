@@ -53,6 +53,7 @@ type attachState struct {
 	clientBuffer  *ringbuf.Buffer
 	coalesceBuf   []byte
 	coalesceTimer *time.Timer
+	lastFlush     time.Time // last coalesced frame sent (leading-edge flush)
 	clientCols    int
 	clientRows    int
 	sidBuf        []byte

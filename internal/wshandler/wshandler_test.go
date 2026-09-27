@@ -32,3 +32,23 @@ func TestActivitySignalDue(t *testing.T) {
 		})
 	}
 }
+
+func TestLeadingEdgeDue(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	idle := &attachState{lastFlush: base}
+	if !leadingEdgeDue(idle, base.Add(coalesceMs)) {
+		t.Error("idle for a full window: echo must go out immediately")
+	}
+	if leadingEdgeDue(idle, base.Add(coalesceMs-time.Millisecond)) {
+		t.Error("inside the window after a flush: must coalesce (burst)")
+	}
+	if leadingEdgeDue(&attachState{coalesceBuf: []byte("x")}, base) {
+		t.Error("pending bytes: must coalesce to keep order")
+	}
+	if leadingEdgeDue(&attachState{coalesceTimer: time.NewTimer(time.Hour)}, base) {
+		t.Error("timer armed: must coalesce")
+	}
+	if !leadingEdgeDue(&attachState{}, base) {
+		t.Error("never flushed: first output must go out immediately")
+	}
+}

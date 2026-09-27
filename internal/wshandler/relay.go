@@ -22,6 +22,14 @@ func activitySignalDue(st *attachState, now time.Time) bool {
 	return st.lastActSig.IsZero() || now.Sub(st.lastActSig) >= activitySigInterval
 }
 
+// leadingEdgeDue reports whether PTY output may skip coalescing: nothing is
+// pending and the last frame went out at least one coalesce window ago. A
+// keystroke echo after idle is then sent at once instead of waiting
+// coalesceMs; bursts still batch (the next chunk inside the window waits).
+func leadingEdgeDue(st *attachState, now time.Time) bool {
+	return st.coalesceTimer == nil && len(st.coalesceBuf) == 0 && now.Sub(st.lastFlush) >= coalesceMs
+}
+
 // replayBuffer sends the session title (if set) and the buffered output
 // snapshot to a newly attached client, batching chunks into frames and
 // throttling into the client ring when the socket write queue exceeds WSHWM.
@@ -108,8 +116,10 @@ func (cc *ClientConn) onPtyData(sid string, data []byte) {
 		return
 	}
 
+	now := time.Now()
+	leading := leadingEdgeDue(st, now)
 	st.coalesceBuf = append(st.coalesceBuf, data...)
-	if len(st.coalesceBuf) >= coalesceFlushBytes {
+	if leading || len(st.coalesceBuf) >= coalesceFlushBytes {
 		if st.coalesceTimer != nil {
 			st.coalesceTimer.Stop()
 			st.coalesceTimer = nil
@@ -137,6 +147,7 @@ func (cc *ClientConn) flushCoalesceLocked(sid string, st *attachState) {
 	copy(chunk, st.coalesceBuf)
 	st.coalesceBuf = st.coalesceBuf[:0]
 	st.coalesceTimer = nil
+	st.lastFlush = time.Now()
 
 	if !st.isPaused && !st.isThrottled {
 		cc.sendEncrypted(chunk, st.sidBuf)

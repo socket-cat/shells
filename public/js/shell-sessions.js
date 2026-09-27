@@ -405,7 +405,19 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         }
       };
 
-      ws.onmessage = async (event) => {
+      // Decrypts start on arrival (parallel), but frames are HANDLED strictly
+      // in arrival order: concurrent WebCrypto results are not spec-guaranteed
+      // to resolve in order.
+      let rx = Promise.resolve();
+      ws.onmessage = (event) => {
+        let pre = null;
+        if (typeof event.data !== 'string' && this.cryptoState?.cryptoReady) {
+          pre = window.ShellsCrypto.decrypt(this.cryptoState, new Uint8Array(event.data).subarray(1));
+          pre.catch(() => {}); // surfaced by onMessage's await
+        }
+        rx = rx.then(() => onMessage(event, pre));
+      };
+      const onMessage = async (event, pre) => {
         try {
           let type, sid, msg, payload;
 
@@ -418,7 +430,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
             const raw = new Uint8Array(event.data);
             const frameType = raw[0];
             const ciphertext = raw.subarray(1);
-            const plaintext = await window.ShellsCrypto.decrypt(this.cryptoState, ciphertext);
+            const plaintext = await (pre || window.ShellsCrypto.decrypt(this.cryptoState, ciphertext));
 
             if (frameType === 0) { // MSG_TYPE_DATA
               const sidBuf = plaintext.subarray(0, 16);
