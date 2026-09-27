@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +20,7 @@ import (
 	"shells/internal/fsutil"
 	"shells/internal/pty"
 	"shells/internal/session"
+	"shells/internal/util"
 )
 
 // Connection represents a saved SSH connection.
@@ -265,21 +265,41 @@ func sshStrictness() string {
 			sshStrictnessCached = "no"
 			return
 		}
-		re := regexp.MustCompile(`OpenSSH_(\d+)\.(\d+)`)
-		m := re.FindStringSubmatch(string(out))
-		if m == nil {
-			sshStrictnessCached = "no"
-			return
-		}
-		major, _ := strconv.Atoi(m[1])
-		minor, _ := strconv.Atoi(m[2])
-		if major > 7 || (major == 7 && minor >= 6) {
+		major, minor, ok := parseOpenSSHVersion(string(out))
+		if ok && (major > 7 || (major == 7 && minor >= 6)) {
 			sshStrictnessCached = "accept-new"
 		} else {
 			sshStrictnessCached = "no"
 		}
 	})
 	return sshStrictnessCached
+}
+
+// parseOpenSSHVersion finds the first "OpenSSH_<major>.<minor>" in s.
+func parseOpenSSHVersion(s string) (major, minor int, ok bool) {
+	for {
+		i := strings.Index(s, "OpenSSH_")
+		if i < 0 {
+			return 0, 0, false
+		}
+		s = s[i+len("OpenSSH_"):]
+		maj, rest := leadingDigits(s)
+		if maj != "" && strings.HasPrefix(rest, ".") {
+			if mnr, _ := leadingDigits(rest[1:]); mnr != "" {
+				major, _ = strconv.Atoi(maj)
+				minor, _ = strconv.Atoi(mnr)
+				return major, minor, true
+			}
+		}
+	}
+}
+
+func leadingDigits(s string) (digits, rest string) {
+	n := 0
+	for n < len(s) && s[n] >= '0' && s[n] <= '9' {
+		n++
+	}
+	return s[:n], s[n:]
 }
 
 func shellEscape(s string) string {
@@ -299,25 +319,44 @@ func buildSSHEnv() []string {
 	return env
 }
 
-var (
-	hostRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.\-]*$`)
-	ipRe   = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
-	userRe = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+$`)
-	uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-)
+// validHost: letters/digits/dots/hyphens, starting with a letter or digit
+// (covers dotted-quad IPv4 too).
+func validHost(host string) bool {
+	return host != "" && util.OnlyChars(host, util.Alnum+".-") && util.OnlyChars(host[:1], util.Alnum)
+}
+
+// isUUID reports whether s is a canonical 8-4-4-4-12 hex UUID (either case).
+// Guards connection IDs used in file paths — keep it strict.
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if s[i] != '-' {
+				return false
+			}
+		} else if !util.OnlyChars(s[i:i+1], "0123456789abcdefABCDEF") {
+			return false
+		}
+	}
+	return true
+}
 
 // ValidateParams checks SSH host/user/port.
 func ValidateParams(host, user string, port int) error {
 	if host == "" || len(host) > 253 {
 		return errors.New("invalid host")
 	}
-	if !hostRe.MatchString(host) && !ipRe.MatchString(host) {
+	if !validHost(host) {
 		return errors.New("invalid host format")
 	}
 	if user == "" || len(user) > 32 {
 		return errors.New("invalid username")
 	}
-	if !userRe.MatchString(user) {
+	// No leading '-': "user@host" is one ssh argv entry, so "-Efile@host"
+	// would be parsed as an option (-E writes a log file).
+	if user[0] == '-' || !util.OnlyChars(user, util.Alnum+"_.-") {
 		return errors.New("invalid username format")
 	}
 	if port < 1 || port > 65535 {
@@ -328,7 +367,7 @@ func ValidateParams(host, user string, port int) error {
 
 // ValidateConnectionID checks a UUID-formatted connection ID.
 func ValidateConnectionID(id string) error {
-	if !uuidRe.MatchString(strings.ToLower(id)) {
+	if !isUUID(id) {
 		return errors.New("invalid connection ID")
 	}
 	return nil
@@ -382,7 +421,7 @@ func (m *Manager) cleanupOrphanedKeys() {
 			continue
 		}
 		seen[id] = true
-		if !valid[id] && uuidRe.MatchString(strings.ToLower(id)) {
+		if !valid[id] && isUUID(id) {
 			deleteKeyFiles(m.cfg.SSHKeysDir, id)
 		}
 	}

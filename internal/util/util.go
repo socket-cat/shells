@@ -11,21 +11,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"shells/internal/crypto"
 )
 
-// hostnameRE matches RFC-compliant hostnames (letters/digits/dots/hyphens,
-// not starting/ending with a hyphen). Precompiled once at package load.
-var hostnameRE = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
+// Alnum is the ASCII letter+digit set for OnlyChars.
+const Alnum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-// ValidHostname reports whether h is a plausible hostname. The 253-byte cap is
+// OnlyChars reports whether every byte of s is in the ASCII set (true for "").
+// Non-ASCII / invalid UTF-8 never matches an ASCII set, so it is rejected.
+func OnlyChars(s, set string) bool { return strings.Trim(s, set) == "" }
+
+// ValidHostname reports whether h is a plausible hostname: letters/digits/
+// dots/hyphens, starting and ending with a letter or digit. The 253-byte cap is
 // the DNS limit — callers that validate strings derived from REMOTE input
 // (e.g. a remote SSH server's hostname) rely on this length bound.
 func ValidHostname(h string) bool {
-	return h != "" && len(h) <= 253 && hostnameRE.MatchString(h)
+	return h != "" && len(h) <= 253 && OnlyChars(h, Alnum+".-") &&
+		OnlyChars(h[:1], Alnum) && OnlyChars(h[len(h)-1:], Alnum)
 }
 
 // EncryptedWriter wraps an http.ResponseWriter and carries the session API key

@@ -27,7 +27,7 @@ jobs:
           for pair in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64; do
             os=${pair%/*}
             arch=${pair#*/}
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -ldflags='-s -w' -o shells-$os-$arch .
+            GOOS=$os GOARCH=$arch scripts/build.sh shells-$os-$arch
           done
           VERSION="${GITHUB_REF_NAME#v}"
           # Version header binds the release version into the signed bytes

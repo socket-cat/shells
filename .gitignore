@@ -23,6 +23,7 @@ tea_debug.log
 # Build / test artifacts
 /tmp/
 /dist/
+/publicgz/
 
 # Local development (not for public repo)
 /devel/

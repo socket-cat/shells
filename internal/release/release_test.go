@@ -83,7 +83,7 @@ func TestInitKeys(t *testing.T) {
 	if err := Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if len(Fingerprints()) != 2 {
-		t.Errorf("expected 2 fingerprints, got %d", len(Fingerprints()))
+	if len(pinnedKeys) != 2 {
+		t.Errorf("expected 2 pinned keys, got %d", len(pinnedKeys))
 	}
 }

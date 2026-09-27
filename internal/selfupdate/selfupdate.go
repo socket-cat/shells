@@ -63,8 +63,8 @@ func Run() {
 		binary = resolved
 	}
 	logPath := os.Getenv("LOG") // empty → child inherits stdio, parent logs to stderr
-	crashLimit := envInt("CRASH_LIMIT", 3)
-	testPort := envInt("TEST_PORT", 8099)
+	crashLimit := config.EnvInt("CRASH_LIMIT", 3)
+	testPort := config.EnvInt("TEST_PORT", 8099)
 
 	logf := makeLogger(logPath)
 
@@ -332,15 +332,6 @@ func envOr(k, d string) string {
 // preflight and roll back forever.
 func tlsEnabled() bool {
 	return config.EnvTrue(os.Getenv("SHELLS_TLS"))
-}
-
-func envInt(k string, d int) int {
-	if v := os.Getenv(k); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return d
 }
 
 func fileExists(p string) bool {

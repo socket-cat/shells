@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"shells/internal/config"
 )
 
 func TestEnabledDefault(t *testing.T) {
@@ -117,15 +119,15 @@ func TestVerifyStaged(t *testing.T) {
 
 func TestEnvInt(t *testing.T) {
 	os.Setenv("SUP_X", "7")
-	if envInt("SUP_X", 3) != 7 {
+	if config.EnvInt("SUP_X", 3) != 7 {
 		t.Error("envInt should read the env value")
 	}
 	os.Setenv("SUP_X", "junk")
-	if envInt("SUP_X", 3) != 3 {
+	if config.EnvInt("SUP_X", 3) != 3 {
 		t.Error("envInt should fall back on non-numeric input")
 	}
 	os.Unsetenv("SUP_X")
-	if envInt("SUP_X", 3) != 3 {
+	if config.EnvInt("SUP_X", 3) != 3 {
 		t.Error("envInt should use the default when unset")
 	}
 }

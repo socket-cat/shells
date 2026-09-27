@@ -10,7 +10,6 @@ package release
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -51,22 +50,6 @@ func Init() error {
 		}
 	}
 	return nil
-}
-
-// Fingerprints returns the pinned key fingerprints (primary first).
-func Fingerprints() []string {
-	out := make([]string, 0, len(pinnedKeys))
-	for _, k := range pinnedKeys {
-		out = append(out, k.fingerprint)
-	}
-	return out
-}
-
-// FingerprintOf derives the display fingerprint for a public key (first 8
-// bytes of its SHA-256, hex).
-func FingerprintOf(pub ed25519.PublicKey) string {
-	sum := sha256.Sum256(pub)
-	return hex.EncodeToString(sum[:8])
 }
 
 // verify checks sig over msg against every pinned key and returns the

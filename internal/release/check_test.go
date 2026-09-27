@@ -27,7 +27,7 @@ func fakeReleaseServer(t *testing.T, tag string) (string, string, []byte, *httpt
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp := FingerprintOf(pub)
+	fp := fingerprintOf(pub)
 
 	binary := []byte("#!/bin/sh\necho fake-binary\n")
 	sum := sha256.Sum256(binary)
@@ -59,7 +59,7 @@ func fakeReleaseServer(t *testing.T, tag string) (string, string, []byte, *httpt
 func useTestKey(t *testing.T, pub ed25519.PublicKey) {
 	t.Helper()
 	old := pinnedKeys
-	pinnedKeys = []pinnedKey{{fingerprint: FingerprintOf(pub), pub: pub}}
+	pinnedKeys = []pinnedKey{{fingerprint: fingerprintOf(pub), pub: pub}}
 	t.Cleanup(func() { pinnedKeys = old })
 }
 
@@ -186,4 +186,11 @@ func TestApplyRejectsTamperedBinary(t *testing.T) {
 	if _, err := Apply(context.Background(), cfg); err == nil {
 		t.Fatalf("expected sha256 mismatch error, got nil")
 	}
+}
+
+// fingerprintOf derives the display fingerprint for a public key (first 8
+// bytes of its SHA-256, hex) — the format of pinnedKey.fingerprint.
+func fingerprintOf(pub ed25519.PublicKey) string {
+	sum := sha256.Sum256(pub)
+	return hex.EncodeToString(sum[:8])
 }

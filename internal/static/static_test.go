@@ -7,8 +7,12 @@ import (
 	"bytes"
 	"image"
 	"image/png"
+	"math/rand/v2"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -105,5 +109,65 @@ func TestGeneratedIconUnknownPath(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code == 200 {
 		t.Fatalf("unknown icon path returned 200")
+	}
+}
+
+// TestInjectSRIMatchesRegexSpec pins the hand-written SRI tag scanner (which
+// replaced regexp) to the original regexes on the real index.html plus edge
+// cases, and checks every local script/stylesheet actually gets integrity.
+func TestInjectSRIMatchesRegexSpec(t *testing.T) {
+	scriptSRI := regexp.MustCompile(`(<script\s[^>]*src=["']([^"']+)["'][^>]*?)(>)`)
+	linkSRI := regexp.MustCompile(`(<link\s[^>]*href=["']([^"']+)["'][^>]*?)(>)`)
+	h := &Handler{hashes: map[string]string{}}
+	old := func(html string) string {
+		html = scriptSRI.ReplaceAllStringFunc(html, func(m string) string {
+			sub := scriptSRI.FindStringSubmatch(m)
+			return h.injectAttr(sub[1], sub[2], sub[3])
+		})
+		return linkSRI.ReplaceAllStringFunc(html, func(m string) string {
+			low := strings.ToLower(m)
+			if strings.Contains(low, `rel="manifest"`) || strings.Contains(low, `rel="icon"`) || strings.Contains(low, `rel="apple-touch-icon"`) {
+				return m
+			}
+			sub := linkSRI.FindStringSubmatch(m)
+			return h.injectAttr(sub[1], sub[2], sub[3])
+		})
+	}
+	page, err := os.ReadFile("../../public/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range regexp.MustCompile(`(?:src|href)="(/[^"?]+)`).FindAllStringSubmatch(string(page), -1) {
+		h.hashes[u[1]] = "sha256-" + u[1]
+	}
+	for _, in := range []string{
+		string(page),
+		`<script src="/a.js"></script><script>x</script><script  src='/a.js?v=1' defer>`,
+		`<scriptx src="/a.js"><SCRIPT src="/a.js"><script src=/a.js><script src="">`,
+		`<link rel="stylesheet" href="/a.js"><link rel="icon" href="/a.js"><link href="/a.js" data-href="/b.js">`,
+		`<script data-src="/a.js" src="/a.js">`, `<script src="/a.js"`, `<<script src="/a.js">>`,
+		"<script\tsrc=\"/a.js\">\n<link\nhref=\"/a.js\">",
+	} {
+		h.hashes["/a.js"] = "sha256-a"
+		if got, want := h.injectSRI(in), old(in); got != want {
+			t.Errorf("injectSRI mismatch\n in: %.200q\ngot: %.200q\nwant: %.200q", in, got, want)
+		}
+	}
+	toks := []string{"<script ", "<link ", "<", ">", "src=", "href=", `"`, "'", "/a.js", "x", " ", `rel="icon"`, "\n"}
+	r := rand.New(rand.NewPCG(3, 4))
+	for i := 0; i < 20000; i++ {
+		var b strings.Builder
+		for j := r.IntN(12); j >= 0; j-- {
+			b.WriteString(toks[r.IntN(len(toks))])
+		}
+		if in := b.String(); h.injectSRI(in) != old(in) {
+			t.Errorf("injectSRI mismatch on %q:\ngot:  %q\nwant: %q", in, h.injectSRI(in), old(in))
+		}
+	}
+	out := h.injectSRI(string(page))
+	for _, tag := range regexp.MustCompile(`<(?:script|link)\s[^>]*(?:src|href)="/(?:js|css|vendor)[^>]*>`).FindAllString(out, -1) {
+		if !strings.Contains(tag, "integrity=") {
+			t.Errorf("no integrity: %s", tag)
+		}
 	}
 }

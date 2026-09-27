@@ -117,3 +117,36 @@ func TestRenderPNGErrors(t *testing.T) {
 		t.Fatal("bad background want error")
 	}
 }
+
+// TestRenderPNGEdgesKeepAccent: on a transparent background every visible
+// pixel, including the anti-aliased fringe, must be the accent hue — only
+// alpha varies. (Guards against feeding straight alpha to a premultiplied
+// encoder, which corrupts fringe colors.)
+func TestRenderPNGEdgesKeepAccent(t *testing.T) {
+	img := mustDecode(t, must(RenderPNG(192, "#fab283", "")))
+	fringe := 0
+	for y := 0; y < 192; y++ {
+		for x := 0; x < 192; x++ {
+			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			if c.A == 0 {
+				continue
+			}
+			if c.A != 255 {
+				fringe++
+			}
+			if c.R != 0xfa || c.G != 0xb2 || c.B != 0x83 {
+				t.Fatalf("pixel (%d,%d) = %+v, want accent hue", x, y, c)
+			}
+		}
+	}
+	if fringe == 0 {
+		t.Fatal("no anti-aliased fringe pixels found")
+	}
+}
+
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
+}

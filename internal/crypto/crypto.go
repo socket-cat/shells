@@ -88,10 +88,6 @@ func Shutdown() {
 	fingerprint = ""
 }
 
-// SecretHash returns the PBKDF2-derived secret hash (used by callers that
-// need to HMAC-verify the app token).
-func SecretHash() []byte { return secretHash }
-
 func loadOrCreateIdentity(keyFile string) error {
 	if data, err := os.ReadFile(keyFile); err == nil {
 		var k struct {

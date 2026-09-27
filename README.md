@@ -62,7 +62,7 @@ with TLS (the PWA needs HTTPS).
 Requires Go 1.24+. Most users don't need this — grab the prebuilt binary above.
 
 ```bash
-CGO_ENABLED=0 go build -ldflags='-s -w' -o shells .
+scripts/build.sh shells
 ```
 
 Cross-compile: set `GOOS`/`GOARCH` (linux/darwin/freebsd × amd64/arm64).

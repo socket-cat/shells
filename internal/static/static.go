@@ -12,19 +12,21 @@
 package static
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"testing/fstest"
 	"time"
 
 	"shells/internal/branding"
@@ -55,6 +57,8 @@ type Handler struct {
 
 	// Pre-processed asset bodies keyed by request path (e.g. "/js/crypto.js").
 	assets map[string][]byte
+	// gz holds the gzipped form of compressible assets, built once at startup.
+	gz map[string][]byte
 	// SRI hashes keyed by request path: "sha256-…".
 	hashes map[string]string
 
@@ -83,6 +87,7 @@ func New(publicFS fs.FS, version, keyDir, accent, appName string, brand *brandin
 		appName:  appName,
 		brand:    brand,
 		assets:   make(map[string][]byte),
+		gz:       make(map[string][]byte),
 		hashes:   make(map[string]string),
 	}
 
@@ -233,29 +238,107 @@ func (h *Handler) storeAsset(reqPath string, body []byte) {
 	hash := "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
 	h.assets[reqPath] = body
 	h.hashes[reqPath] = hash
+	if ext := filepath.Ext(reqPath); len(body) > 512 && ext != ".woff2" && ext != ".png" {
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		_, _ = zw.Write(body)
+		_ = zw.Close()
+		h.gz[reqPath] = buf.Bytes()
+	}
 }
 
-var (
-	scriptSRI = regexp.MustCompile(`(<script\s[^>]*src=["']([^"']+)["'][^>]*?)(>)`)
-	linkSRI   = regexp.MustCompile(`(<link\s[^>]*href=["']([^"']+)["'][^>]*?)(>)`)
-)
-
-func (h *Handler) injectSRI(html string) string {
-	html = scriptSRI.ReplaceAllStringFunc(html, func(match string) string {
-		sub := scriptSRI.FindStringSubmatch(match)
-		return h.injectAttr(sub[1], sub[2], sub[3])
+// Unpack returns an in-memory copy of fsys with every NAME.gz inflated to
+// NAME. The binary embeds assets pre-gzipped (scripts/gzassets.go).
+func Unpack(fsys fs.FS) (fs.FS, error) {
+	out := fstest.MapFS{}
+	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return err
+		}
+		if name, ok := strings.CutSuffix(p, ".gz"); ok {
+			zr, err := gzip.NewReader(bytes.NewReader(b))
+			if err != nil {
+				return err
+			}
+			if b, err = io.ReadAll(zr); err != nil {
+				return err
+			}
+			p = name
+		}
+		out[p] = &fstest.MapFile{Data: b}
+		return nil
 	})
-	html = linkSRI.ReplaceAllStringFunc(html, func(match string) string {
+	return out, err
+}
+
+// injectSRI adds integrity attributes to every <script src> / <link href>
+// tag whose URL is a hashed asset.
+func (h *Handler) injectSRI(html string) string {
+	var out strings.Builder
+	for {
+		start := strings.IndexByte(html, '<')
+		if start < 0 {
+			break
+		}
+		end := strings.IndexByte(html[start:], '>')
+		if end < 0 {
+			break
+		}
+		end += start
+		tag, ok := h.tagSRI(html[start:end])
+		if !ok { // not a hashable tag: retry from the next '<'
+			out.WriteString(html[:start+1])
+			html = html[start+1:]
+			continue
+		}
+		out.WriteString(html[:start])
+		out.WriteString(tag)
+		html = html[end:] // keeps the '>'
+	}
+	out.WriteString(html)
+	return out.String()
+}
+
+// tagSRI handles one tag (without its closing '>'); ok is false when tag is
+// not a <script src> / <link href> tag.
+func (h *Handler) tagSRI(tag string) (string, bool) {
+	var attr string
+	switch {
+	case isTag(tag, "<script"):
+		attr = "src="
+	case isTag(tag, "<link"):
 		// Branding links (manifest/icon) are served dynamically; skip SRI so a
 		// stale integrity attribute can't block the fresh content.
-		low := strings.ToLower(match)
+		low := strings.ToLower(tag)
 		if strings.Contains(low, `rel="manifest"`) || strings.Contains(low, `rel="icon"`) || strings.Contains(low, `rel="apple-touch-icon"`) {
-			return match
+			return tag, true
 		}
-		sub := linkSRI.FindStringSubmatch(match)
-		return h.injectAttr(sub[1], sub[2], sub[3])
-	})
-	return html
+		attr = "href="
+	default:
+		return "", false
+	}
+	i := strings.LastIndex(tag, attr)
+	if i < 0 {
+		return "", false
+	}
+	v := tag[i+len(attr):]
+	if v == "" || (v[0] != '"' && v[0] != '\'') {
+		return "", false
+	}
+	n := strings.IndexAny(v[1:], `"'`)
+	if n < 1 {
+		return "", false
+	}
+	return h.injectAttr(tag, v[1:1+n], ""), true
+}
+
+// isTag reports whether tag opens with name followed by whitespace.
+func isTag(tag, name string) bool {
+	return len(tag) > len(name) && strings.HasPrefix(tag, name) && strings.IndexByte(" \t\n\f\r", tag[len(name)]) >= 0
 }
 
 func (h *Handler) injectAttr(prefix, srcURL, suffix string) string {
@@ -379,14 +462,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
 
-	// gzip.
-	if acceptsGzip(r) && len(body) > 512 {
+	// gzip (pre-compressed at startup).
+	if gz := h.gz[reqPath]; gz != nil && acceptsGzip(r) {
 		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Del("Content-Length")
+		w.Header().Set("Vary", "Accept-Encoding")
 		w.WriteHeader(http.StatusOK)
-		gz := gzip.NewWriter(w)
-		_, _ = gz.Write(body)
-		_ = gz.Close()
+		_, _ = w.Write(gz)
 		return
 	}
 

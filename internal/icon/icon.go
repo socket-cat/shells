@@ -14,11 +14,11 @@ package icon
 
 import (
 	"bytes"
+	"compress/zlib"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
+	"hash/crc32"
 	"math"
 	"strings"
 )
@@ -116,8 +116,9 @@ func RenderPNG(size int, accent, bg string) ([]byte, error) {
 		hasBG = true
 	}
 
-	rect := image.Rect(0, 0, size, size)
-	img := image.NewRGBA(rect)
+	// PNG scanlines: a filter byte (0 = none) then non-premultiplied RGBA.
+	stride := 1 + 4*size
+	pix := make([]byte, stride*size)
 	scale := canvas / float64(size)
 	// Anti-aliasing band of ~1 device pixel, expressed in canvas units so the
 	// smoothing stays ~1px regardless of output size.
@@ -141,16 +142,41 @@ func RenderPNG(size int, accent, bg string) ([]byte, error) {
 				r := uint8(float64(br)*(1-a) + float64(ar)*a + 0.5)
 				g := uint8(float64(bgc)*(1-a) + float64(ag)*a + 0.5)
 				b := uint8(float64(bb)*(1-a) + float64(ab)*a + 0.5)
-				img.SetRGBA(px, py, color.RGBA{R: r, G: g, B: b, A: 255})
+				o := py*stride + 1 + 4*px
+				pix[o], pix[o+1], pix[o+2], pix[o+3] = r, g, b, 255
 			} else if a > 0 {
-				img.SetRGBA(px, py, color.RGBA{R: ar, G: ag, B: ab, A: uint8(a*255 + 0.5)})
+				o := py*stride + 1 + 4*px
+				pix[o], pix[o+1], pix[o+2], pix[o+3] = ar, ag, ab, uint8(a*255+0.5)
 			}
 		}
 	}
 
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	return encodePNG(size, pix)
+}
+
+// encodePNG writes 8-bit RGBA scanlines (filter byte included) as a PNG —
+// hand-rolled because image/png costs ~115 KB of binary for this one call.
+func encodePNG(size int, scanlines []byte) ([]byte, error) {
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	if _, err := zw.Write(scanlines); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	ihdr := binary.BigEndian.AppendUint32(nil, uint32(size))
+	ihdr = binary.BigEndian.AppendUint32(ihdr, uint32(size))
+	ihdr = append(ihdr, 8, 6, 0, 0, 0) // 8-bit, RGBA, deflate, no filter, no interlace
+	out := []byte("\x89PNG\r\n\x1a\n")
+	for _, c := range []struct {
+		typ  string
+		data []byte
+	}{{"IHDR", ihdr}, {"IDAT", z.Bytes()}, {"IEND", nil}} {
+		out = binary.BigEndian.AppendUint32(out, uint32(len(c.data)))
+		start := len(out)
+		out = append(append(out, c.typ...), c.data...)
+		out = binary.BigEndian.AppendUint32(out, crc32.ChecksumIEEE(out[start:]))
+	}
+	return out, nil
 }

@@ -8,9 +8,9 @@
 package branding
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 
@@ -30,10 +30,11 @@ type Store struct {
 	path string // empty => in-memory only (no persistence)
 }
 
-var hexRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
-
 // ValidAccent reports whether s is a usable accent color (#rrggbb).
-func ValidAccent(s string) bool { return hexRe.MatchString(s) }
+func ValidAccent(s string) bool {
+	_, err := hex.DecodeString(strings.TrimPrefix(s, "#"))
+	return len(s) == 7 && s[0] == '#' && err == nil
+}
 
 // Load reads branding from path (if present), falling back to the provided
 // defaults. path may be "" for an in-memory store.

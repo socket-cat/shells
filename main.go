@@ -38,7 +38,12 @@ import (
 	"shells/internal/wshandler"
 )
 
-//go:embed public
+//go:generate go run scripts/gzassets.go
+
+// publicgz is public/ pre-gzipped by scripts/gzassets.go; static.Unpack
+// inflates it into memory at startup.
+//
+//go:embed publicgz
 var embedPublic embed.FS
 
 //go:embed VERSION
@@ -91,9 +96,12 @@ func main() {
 	wsH := wshandler.New(cfg, mgr, authStore)
 	wsH.RegisterSessionEvents()
 
-	subFS, err := fs.Sub(embedPublic, "public")
+	subFS, err := fs.Sub(embedPublic, "publicgz")
+	if err == nil {
+		subFS, err = static.Unpack(subFS)
+	}
 	if err != nil {
-		log.Fatalf("embed sub: %v", err)
+		log.Fatalf("embed assets: %v", err)
 	}
 
 	brand := branding.Load(cfg.BrandingFile, cfg.AppName, cfg.Accent)
@@ -191,8 +199,8 @@ func main() {
 	}
 
 	// TLS hardening toward SSL Labs A+: minimum TLS 1.2, and an explicit
-	// strong-only TLS 1.2 cipher set (ECDHE-ECDSA with AEAD). TLS 1.3 suites,
-	// forward secrecy curves and HTTP/2 are Go defaults. The cert is ECDSA
+	// strong-only TLS 1.2 cipher set (ECDHE-ECDSA with AEAD). TLS 1.3 suites
+	// and forward secrecy curves are Go defaults. The cert is ECDSA
 	// (selftls uses P-256), so ECDSA suites only.
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -210,6 +218,10 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second, // headers only; does not cap long-lived WS
 		IdleTimeout:       120 * time.Second,
 	}
+	// HTTP/1.1 only: scripts/build.sh omits net/http's HTTP/2 (nethttpomithttp2),
+	// but Go would still advertise "h2" via ALPN and browsers would fail.
+	server.Protocols = new(http.Protocols)
+	server.Protocols.SetHTTP1(true)
 
 	// Graceful shutdown.
 	go func() {

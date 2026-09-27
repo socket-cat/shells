@@ -116,9 +116,9 @@ func Load(version string) (*Config, error) {
 	}
 	updateRepo := firstNonEmpty(os.Getenv("SHELLS_UPDATE_REPO"), "socket-cat/shells")
 	c := &Config{
-		Port:                  envInt("PORT", 2222),
+		Port:                  EnvInt("PORT", 2222),
 		KeepaliveIntervalMs:   KeepaliveIntervalMs,
-		MaxSessions:           envInt("MAX_SESSIONS", 200),
+		MaxSessions:           EnvInt("MAX_SESSIONS", 200),
 		MaxClientsPerSession:  MaxClientsPerSession,
 		OutputBufferMax:       OutputBufferMax,
 		WSHWM:                 WSHWM,
@@ -234,7 +234,8 @@ func validHexColor(s string) bool {
 	return true
 }
 
-func envInt(key string, fallback int) int {
+// EnvInt reads an integer env var, falling back when unset or non-numeric.
+func EnvInt(key string, fallback int) int {
 	v := os.Getenv(key)
 	if v == "" {
 		return fallback
