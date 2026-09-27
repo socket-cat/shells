@@ -1325,7 +1325,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       fontSize: this._getFontSize(),
       lineHeight: 1,
       fontFamily: "'Fira Code', monospace",
-      fontLigatures: true,
       // mobile gets a lighter scrollback so resizes don't re-wrap a huge buffer (the full 5000 stays on desktop)
       scrollback: this.isMobile() ? 1500 : 5000,
       theme: (window.ShellTheme && window.ShellTheme.xtermTheme) || window.darkTheme || { background: '#000000' },
@@ -1333,7 +1332,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       allowProposedApi: true,
       drawBoldTextInBrightColors: true,
       minimumContrastRatio: 4.5,
-      scrollOnUserInput: false,
+      // Typing snaps to the prompt like a native terminal; mobile keeps the
+      // viewport still (IME/keyboard events there would yank it).
+      scrollOnUserInput: !this.isMobile(),
       smoothScrollDuration: 0,
       fastScrollModifier: 'alt',
       fastScrollSensitivity: 5,
@@ -1369,8 +1370,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       }
       // App shortcuts (app.js, window keydown) must not also reach the shell: xterm sees them first,
       // e.g. Alt+N would send ESC n (readline history search) and swallow the next typed line
-      if ((e.altKey && !e.ctrlKey && ['KeyN', 'KeyQ', 'ArrowLeft', 'ArrowRight'].includes(e.code))
-        || (e.ctrlKey && !e.altKey && (e.code === 'Tab' || (e.code === 'KeyF' && searchAddon)))) {
+      // (Alt+N/Q only as plain letters — see altLetter in app.js)
+      if ((e.altKey && !e.ctrlKey && ((e.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(e.code)) || ['n', 'q'].includes(e.key.toLowerCase())))
+        || (e.ctrlKey && !e.altKey && (e.code === 'Tab' || (e.shiftKey && e.code === 'KeyF' && searchAddon)))) {
         return false;
       }
       // Ctrl+Shift+C: copy selection (Chrome/Edge otherwise open DevTools inspector)

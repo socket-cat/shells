@@ -20,20 +20,28 @@ window.__HOSTNAME__ = document.body.dataset.hostname;
 window.__APP_VERSION__ = document.body.dataset.version || '';
 
 // ── Global Shortcuts ──
+// Alt+letter shortcuts fire only when the key yields that plain letter, so
+// characters composed with Alt still reach the shell: macOS Option+N is the
+// ñ dead key, Option+Q types œ, Windows AltGr (Ctrl+Alt) +Q types @.
+const altLetter = (e, letter) => e.altKey && !e.ctrlKey && e.key.toLowerCase() === letter;
 window.addEventListener('keydown', (e) => {
-  if (e.altKey && e.code === 'KeyQ') {
+  if (altLetter(e, 'q')) {
     e.preventDefault();
-    if (window.ShellSessions.activeId) window.ShellSessions.destroy(window.ShellSessions.activeId);
+    const ss = window.ShellSessions;
+    const tile = ss.activeId && ss.sessions.get(ss.activeId)?.tile;
+    // Same confirmation as the Close button: destroying kills running jobs.
+    if (tile) TuiDialog.confirmDestroy(ss.activeId, tile.querySelector('.tile-title')?.textContent || 'this shell', tile);
   }
-  if (e.altKey && e.code === 'KeyN') {
+  if (altLetter(e, 'n')) {
     e.preventDefault();
     window.ShellSessions.promptCreate();
   }
-  if (e.altKey && e.code === 'ArrowRight') {
+  // Alt+Shift+←/→ like native terminals leave Alt+←/→ to the shell (word movement).
+  if (e.altKey && e.shiftKey && e.code === 'ArrowRight') {
     e.preventDefault();
     window.ShellSessions.next();
   }
-  if (e.altKey && e.code === 'ArrowLeft') {
+  if (e.altKey && e.shiftKey && e.code === 'ArrowLeft') {
     e.preventDefault();
     window.ShellSessions.previous();
   }
@@ -42,17 +50,17 @@ window.addEventListener('keydown', (e) => {
     if (e.shiftKey) window.ShellSessions.previous();
     else window.ShellSessions.next();
   }
-  if (e.ctrlKey && e.code === 'KeyF' && !e.altKey) {
-    // In-terminal search when the terminal itself is focused (the xterm
-    // textarea). Other inputs (search bar, cmd bar, dialogs) keep the
-    // browser's native find; AltGr combos pass through. With terminal focus
-    // this intentionally overrides vim/less/htop's Ctrl+F (page-down) — Esc
+  if (e.ctrlKey && e.shiftKey && e.code === 'KeyF' && !e.altKey) {
+    // Ctrl+Shift+F: in-terminal search when the terminal itself is focused
+    // (the xterm textarea), as in native terminals — plain Ctrl+F stays with
+    // the shell (vim/less/htop page-down). Other inputs (search bar, cmd bar,
+    // dialogs) keep the browser's behavior; AltGr combos pass through. Esc
     // closes the bar and returns focus.
     const ss = window.ShellSessions;
     const session = ss && ss.activeId ? ss.sessions.get(ss.activeId) : null;
     if (session && session.searchAddon) {
       const ae = document.activeElement;
-      // Intentionally NOT TuiDialog.isEditableTarget: this variant must treat the xterm helper textarea as pass-through (Ctrl+F in terminal) and ignores contentEditable.
+      // Intentionally NOT TuiDialog.isEditableTarget: this variant must treat the xterm helper textarea as pass-through (Ctrl+Shift+F in terminal) and ignores contentEditable.
       const inInput = !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA'));
       const isTerminalInput = inInput && ae.classList && ae.classList.contains('xterm-helper-textarea');
       if (!inInput || isTerminalInput) {

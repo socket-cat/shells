@@ -17,7 +17,7 @@
  */
 
 // ── In-terminal search (active tile) ──
-// Extracted from shell-sessions.js. In-terminal Ctrl+F search
+// Extracted from shell-sessions.js. In-terminal Ctrl+Shift+F search
 // over the active session's buffer + decorations. Search state
 // (_searchState/_searchDecorations) stays declared once in the core
 // literal. closeSearch calls window._focusWithoutScroll — a pinned-core
