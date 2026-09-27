@@ -41,6 +41,13 @@ const healthJson = () =>
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
 
+const bareV = (v) => String(v || '').replace(/^v/, '');
+
+// Update fallback: surface the splash's "Force reload" link now instead of
+// after its 12s stuck timer (the handler lives inline in index.html).
+const revealForceReload = () =>
+  document.querySelectorAll('#load-force-reload').forEach((l) => l.classList.remove('hidden'));
+
 (function () {
   if (!('serviceWorker' in navigator)) return;
 
@@ -50,7 +57,7 @@ const healthJson = () =>
   let updateModalShown = false;
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if ((!updateRequested && !window.__shellsAutoReload) || reloading) return;
+    if (!updateRequested || reloading) return;
     reloading = true;
     window.location.reload();
   });
@@ -62,12 +69,36 @@ const healthJson = () =>
     try { newV = sessionStorage.getItem('shells-updated-to'); } catch (_) {}
     if (!newV) return;
     try { sessionStorage.removeItem('shells-updated-to'); } catch (_) {}
+    // Verify the code actually loaded is the new version; if not, one more
+    // hard reload (flagged so it can never loop), then warn instead.
+    const ok = bareV(document.body.dataset.version) === bareV(newV);
+    if (!ok) {
+      let retried;
+      try { retried = sessionStorage.getItem('shells-update-retry'); } catch (_) {}
+      if (!retried) {
+        try {
+          sessionStorage.setItem('shells-update-retry', '1');
+          sessionStorage.setItem('shells-updated-to', newV);
+        } catch (_) {}
+        window.shellsForceReload();
+        return;
+      }
+      revealForceReload();
+    }
+    try { sessionStorage.removeItem('shells-update-retry'); } catch (_) {}
     const start = Date.now();
     (function wait() {
       const ready = window.TuiDialog && window.TuiDialog.toast && !document.getElementById('load-screen');
       if (ready || Date.now() - start > 10000) {
         if (window.TuiDialog && window.TuiDialog.toast) {
-          window.TuiDialog.toast(`Updated to v${newV}`, 'success');
+          if (ok) window.TuiDialog.toast(`Updated to v${bareV(newV)}`, 'success');
+          else if (window.TuiDialog.confirm) {
+            window.TuiDialog.confirm('Update incomplete', `v${bareV(newV)} is installed but this page still runs old code.`, {
+              confirmText: 'Force reload',
+              cancelText: 'Later',
+              size: 'small',
+            }).then((go) => { if (go) window.shellsForceReload(); });
+          }
         }
         return;
       }
@@ -164,14 +195,17 @@ const healthJson = () =>
 })();
 
 // 1c. Seamless self-update reload. After the server applies a verified update
-// and restarts, drive the SW update + activation automatically so the user
-// lands on the new version with no manual refresh (desktop or mobile PWA).
-window.pwaReloadAfterUpdate = async function pwaReloadAfterUpdate() {
-  // Wait for the server to come back (health is unencrypted).
+// and restarts, wait for the new server, then one hard reload onto its code
+// (desktop or mobile PWA); the post-load check in 1b verifies what loaded.
+window.pwaReloadAfterUpdate = async function pwaReloadAfterUpdate(target) {
+  // Wait for the server to report the accepted version (health is unencrypted). The old one keeps
+  // answering for ~1.5s before it restarts; reloading then would land on
+  // the old code.
   const up = await new Promise((resolve) => {
     let tries = 0;
     const tick = async () => {
-      if (await healthJson()) return resolve(true);
+      const h = await healthJson();
+      if (h && bareV(h.version) === bareV(target)) return resolve(true);
       tries += 1;
       if (tries >= 50) return resolve(false); // ~25s cap
       setTimeout(tick, 500);
@@ -180,41 +214,13 @@ window.pwaReloadAfterUpdate = async function pwaReloadAfterUpdate() {
   });
   if (!up) {
     if (window.TuiDialog && window.TuiDialog.toast) {
-      window.TuiDialog.toast("Server is restarting — reload when it's back", 'warning');
+      window.TuiDialog.toast("Server is taking long to restart — use Force reload when it's back", 'warning');
     }
+    revealForceReload();
     return;
   }
-  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    window.__shellsAutoReload = true; // controllerchange → reload (see 1b)
-    try {
-      const reg = await navigator.serviceWorker.getRegistration();
-      if (!reg) { window.location.reload(); return; }
-      const activate = (worker) => {
-        if (worker && worker.state === 'installed') {
-          try { worker.postMessage('SKIP_WAITING'); } catch (_) {}
-        }
-      };
-      const onFound = () => {
-        const w = reg.installing || reg.waiting;
-        if (!w) return;
-        activate(w);
-        w.addEventListener('statechange', () => { if (w.state === 'installed') activate(w); });
-      };
-      reg.addEventListener('updatefound', onFound);
-      activate(reg.waiting);
-      await reg.update();
-      // Fallback: if the new SW never activates, reload anyway.
-      setTimeout(() => {
-        window.__shellsAutoReload = false;
-        window.location.reload();
-      }, 8000);
-    } catch (_) {
-      window.__shellsAutoReload = false;
-      window.location.reload();
-    }
-  } else {
-    window.location.reload();
-  }
+  try { sessionStorage.removeItem('shells-update-retry'); } catch (_) {}
+  window.shellsForceReload();
 };
 
 // 2. PWA Installability Logic

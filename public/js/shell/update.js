@@ -174,7 +174,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         // Flag the new version so the post-reload toast says "Updated to vX".
         try { sessionStorage.setItem('shells-updated-to', info.latest); } catch (_) {}
         // Seamless: reload onto the new version with no manual refresh.
-        if (window.pwaReloadAfterUpdate) window.pwaReloadAfterUpdate();
+        if (window.pwaReloadAfterUpdate) window.pwaReloadAfterUpdate(info.latest);
       } else if (res?.data?.verificationFailed) {
         this._showVerificationAlarm(res.data, true);
       } else {

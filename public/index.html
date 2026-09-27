@@ -89,6 +89,24 @@
         }
       }, 2000);
 
+      // Shared with pwa.js (self-update reload), so there is one implementation.
+      window.shellsForceReload = async function () {
+        try {
+          if ('serviceWorker' in navigator) {
+            var regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(function (r) { return r.unregister(); }));
+          }
+        } catch (_) {}
+        try {
+          var keys = await caches.keys();
+          await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+        } catch (_) {}
+        window.location.reload();
+        setTimeout(function () {
+          window.location.href = window.location.pathname + '?_=' + Date.now();
+        }, 800);
+      };
+
       document.addEventListener('click', function (e) {
         var link = e.target && e.target.closest ? e.target.closest('#load-force-reload') : null;
         if (!link || link.dataset.busy) return;
@@ -97,22 +115,7 @@
         link.textContent = 'Reloading…';
         link.style.opacity = '0.5';
         link.style.pointerEvents = 'none';
-        (async function () {
-          try {
-            if ('serviceWorker' in navigator) {
-              var regs = await navigator.serviceWorker.getRegistrations();
-              await Promise.all(regs.map(function (r) { return r.unregister(); }));
-            }
-          } catch (_) {}
-          try {
-            var keys = await caches.keys();
-            await Promise.all(keys.map(function (k) { return caches.delete(k); }));
-          } catch (_) {}
-          window.location.reload();
-          setTimeout(function () {
-            window.location.href = window.location.pathname + '?_=' + Date.now();
-          }, 800);
-        })();
+        window.shellsForceReload();
       });
     })();
   </script>
