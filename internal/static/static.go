@@ -424,9 +424,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body := h.templateLive(raw)
 		body = []byte(h.injectSRI(string(body)))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
+		// Rendered live for branding, so revalidate on every load — but the
+		// weak ETag over the rendered bytes makes an unchanged page a 304
+		// instead of a full re-download.
+		w.Header().Set("Cache-Control", "no-cache")
+		sum := sha256.Sum256(body)
+		etag := `W/"sha256-` + base64.StdEncoding.EncodeToString(sum[:]) + `"`
+		w.Header().Set("ETag", etag)
+		if strings.Contains(r.Header.Get("If-None-Match"), etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		if acceptsGzip(r) {
+			var buf bytes.Buffer
+			zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+			_, _ = zw.Write(body)
+			_ = zw.Close()
+			body = buf.Bytes()
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Set("Vary", "Accept-Encoding")
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 		return

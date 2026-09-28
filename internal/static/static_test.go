@@ -5,8 +5,10 @@ package static
 
 import (
 	"bytes"
+	"compress/gzip"
 	"image"
 	"image/png"
+	"io"
 	"math/rand/v2"
 	"net/http/httptest"
 	"os"
@@ -196,5 +198,68 @@ func TestETagRevalidation(t *testing.T) {
 	}
 	if w := get(`W/"sha256-stale"`); w.Code != 200 {
 		t.Fatalf("stale tag: code %d, want 200", w.Code)
+	}
+}
+
+// TestIndexHTMLGzipETag: the live-rendered index.html revalidates with a weak
+// ETag over the rendered bytes (so an unchanged page costs a bodyless 304),
+// serves gzip when accepted, and changes its ETag when branding changes.
+func TestIndexHTMLGzipETag(t *testing.T) {
+	h := newTestHandler(t, "#fab283")
+	get := func(inm, ae string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/index.html", nil)
+		if inm != "" {
+			r.Header.Set("If-None-Match", inm)
+		}
+		if ae != "" {
+			r.Header.Set("Accept-Encoding", ae)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	identity := get("", "")
+	gz := get("", "gzip")
+	if gz.Code != 200 || gz.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("gzip GET: code %d, Content-Encoding %q", gz.Code, gz.Header().Get("Content-Encoding"))
+	}
+	if gz.Header().Get("Vary") != "Accept-Encoding" {
+		t.Fatalf("gzip GET: Vary = %q", gz.Header().Get("Vary"))
+	}
+
+	// The weak validator is shared across encodings.
+	etag := gz.Header().Get("ETag")
+	if !strings.HasPrefix(etag, `W/"sha256-`) || etag != identity.Header().Get("ETag") {
+		t.Fatalf("ETag gz=%q identity=%q", etag, identity.Header().Get("ETag"))
+	}
+
+	// The gzip body decodes to the identity body.
+	zr, err := gzip.NewReader(bytes.NewReader(gz.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	plain, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("read gzip: %v", err)
+	}
+	if !bytes.Equal(plain, identity.Body.Bytes()) {
+		t.Fatalf("gzip body %q != identity body %q", plain, identity.Body.Bytes())
+	}
+
+	if w := get(etag, ""); w.Code != 304 || w.Body.Len() != 0 {
+		t.Fatalf("revalidate: code %d body %d, want 304 empty", w.Code, w.Body.Len())
+	}
+	if w := get(`W/"sha256-stale"`, ""); w.Code != 200 {
+		t.Fatalf("stale tag: code %d, want 200", w.Code)
+	}
+
+	// A branding edit changes the rendered bytes → new ETag, so the old tag
+	// must miss (200 with fresh content), never a false 304.
+	if err := h.brand.Set("Renamed", "#fab283"); err != nil {
+		t.Fatalf("brand.Set: %v", err)
+	}
+	if w := get(etag, ""); w.Code != 200 {
+		t.Fatalf("after branding change: code %d, want 200", w.Code)
 	}
 }
