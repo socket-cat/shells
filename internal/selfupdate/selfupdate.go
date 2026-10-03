@@ -64,9 +64,9 @@ func Run() {
 	if resolved, err := filepath.EvalSymlinks(binary); err == nil {
 		binary = resolved
 	}
-	logPath := os.Getenv("LOG") // empty → child inherits stdio, parent logs to stderr
-	crashLimit := config.EnvInt("CRASH_LIMIT", 3)
-	testPort := config.EnvInt("TEST_PORT", 0) // 0: a free port per pre-flight
+	logPath := envOr("SHELLS_LOG", os.Getenv("LOG")) // empty → child inherits stdio, parent logs to stderr
+	crashLimit := config.FirstEnvInt([]string{"SHELLS_CRASH_LIMIT", "CRASH_LIMIT"}, 3)
+	testPort := config.FirstEnvInt([]string{"SHELLS_TEST_PORT", "TEST_PORT"}, 0) // 0: a free port per pre-flight
 
 	logf := makeLogger(logPath)
 

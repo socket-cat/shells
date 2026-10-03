@@ -22,13 +22,13 @@ then appear in your dashboard.
 ```bash
 curl -fsSL "https://github.com/socket-cat/shells/releases/latest/download/shells-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o shells
 chmod +x shells
-SECRET=your-secret PORT=2222 ./shells
+SHELLS_SECRET=your-secret ./shells
 ```
 
 <p align="center"><img src="docs/demo.gif" alt="Shells demo — desktop and mobile" width="920"></p>
 
 Open `http://localhost:2222` — the browser asks for the E2E secret; enter the
-same `SECRET` you just set. Prebuilt for Linux, macOS and FreeBSD (amd64 +
+same `SHELLS_SECRET` you just set. Prebuilt for Linux, macOS and FreeBSD (amd64 +
 arm64); [releases](https://github.com/socket-cat/shells/releases/latest) have
 checksums and direct links. For production, put it behind a reverse proxy
 with TLS (the PWA needs HTTPS).
@@ -48,13 +48,16 @@ with TLS (the PWA needs HTTPS).
 
 | Variable | Default | What |
 |---|---|---|
-| `PORT` | `2222` | Listen port |
-| `SECRET` | random | E2E shared secret — **set this** |
-| `MAX_SESSIONS` | `200` | Max concurrent shells |
+| `SHELLS_HOST` | `127.0.0.1` | Listen address (`0.0.0.0` for all interfaces; alias: `HOST`) |
+| `SHELLS_PORT` | `2222` | Listen port (alias: `PORT`) |
+| `SHELLS_SECRET` | random | E2E shared secret — **set this** (alias: `SECRET`) |
+| `SHELLS_MAX_SESSIONS` | `200` | Max concurrent shells (alias: `MAX_SESSIONS`) |
+| `SHELLS_LOG` | stdout/stderr | Log file path for supervisor & server (alias: `LOG`) |
 | `SHELLS_CWD` | `~` | Default working directory |
 | `SHELLS_DEFAULT_SHELL` | auto-detected | Shell binary to spawn |
 | `SHELLS_KEY_DIR` | `~/.socket.cat/config/shells` | Keys + state directory |
 | `SHELLS_TLS` | `off` | Self-signed HTTPS (`wss://`, secure cookies) |
+| `SHELLS_TOKEN` | random | Admin bearer API token (`X-Shells-Token`) |
 | `SHELLS_UPDATE_CHECK` | `true` | Self-update check (opt-out) |
 
 ## Build from source

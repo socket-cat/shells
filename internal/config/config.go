@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,6 +51,7 @@ var NonReplayableDecModes = map[string]bool{
 
 // Config bundles every resolved setting.
 type Config struct {
+	Host                 string
 	Port                 int
 	KeepaliveIntervalMs  int
 	MaxSessions          int
@@ -116,9 +118,10 @@ func Load(version string) (*Config, error) {
 	}
 	updateRepo := firstNonEmpty(os.Getenv("SHELLS_UPDATE_REPO"), "socket-cat/shells")
 	c := &Config{
-		Port:                  EnvInt("PORT", 2222),
+		Host:                  firstNonEmpty(os.Getenv("SHELLS_HOST"), os.Getenv("HOST"), "127.0.0.1"),
+		Port:                  FirstEnvInt([]string{"SHELLS_PORT", "PORT"}, 2222),
 		KeepaliveIntervalMs:   KeepaliveIntervalMs,
-		MaxSessions:           EnvInt("MAX_SESSIONS", 200),
+		MaxSessions:           FirstEnvInt([]string{"SHELLS_MAX_SESSIONS", "MAX_SESSIONS"}, 200),
 		MaxClientsPerSession:  MaxClientsPerSession,
 		OutputBufferMax:       OutputBufferMax,
 		WSHWM:                 WSHWM,
@@ -220,6 +223,12 @@ func Load(version string) (*Config, error) {
 	return c, nil
 }
 
+// Addr returns the network listen address formed from Host and Port.
+// IPv6 literal hosts are bracketed automatically.
+func (c *Config) Addr() string {
+	return net.JoinHostPort(strings.Trim(c.Host, "[]"), strconv.Itoa(c.Port))
+}
+
 // --- helpers ---
 
 func validHexColor(s string) bool {
@@ -245,6 +254,18 @@ func EnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// FirstEnvInt reads the first set integer env var from keys, falling back to fallback.
+func FirstEnvInt(keys []string, fallback int) int {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				return n
+			}
+		}
+	}
+	return fallback
 }
 
 // EnvTrue is the single shared parser for boolean env flags (SHELLS_TLS and
@@ -346,8 +367,11 @@ func readOrCreateHex(path string, n int) ([]byte, error) {
 }
 
 func resolveSecret(secretFile string) (string, string, error) {
+	if env := os.Getenv("SHELLS_SECRET"); env != "" {
+		return env, "$SHELLS_SECRET", nil
+	}
 	if env := os.Getenv("SECRET"); env != "" {
-		return env, "env", nil
+		return env, "$SECRET", nil
 	}
 	raw, err := os.ReadFile(secretFile)
 	if err == nil {

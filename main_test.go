@@ -48,7 +48,7 @@ func TestEmbeddedAssetsFresh(t *testing.T) {
 }
 
 // TestTokenLogNoteRedacts asserts the startup-log token note names the source
-// ($SHELLS_TOKEN / auto-generated) and never contains a token-like secret.
+// ($SHELLS_TOKEN) and never contains a token-like secret or auto-generated noise.
 // The redaction is structural: no code path feeds cfg.AppToken into the
 // message at all, so any 8+ hex-char candidate must stay absent.
 func TestTokenLogNoteRedacts(t *testing.T) {
@@ -63,8 +63,7 @@ func TestTokenLogNoteRedacts(t *testing.T) {
 	if got, want := tokenLogNote("env"), "(auth token from $SHELLS_TOKEN)"; got != want {
 		t.Fatalf("tokenLogNote(env) = %q, want %q", got, want)
 	}
-	if got, want := tokenLogNote("generated"),
-		"(auth token auto-generated this launch — set $SHELLS_TOKEN to pin one)"; got != want {
-		t.Fatalf("tokenLogNote(generated) = %q, want %q", got, want)
+	if got := tokenLogNote("generated"); got != "" {
+		t.Fatalf("tokenLogNote(generated) = %q, want empty", got)
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"crypto/tls"
 	"embed"
 	"errors"
-	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -119,7 +118,7 @@ func main() {
 	mux.HandleFunc("/api/", apiH.ServeHTTP)
 	mux.Handle("/", staticH)
 
-	addr := fmt.Sprintf(":%d", cfg.Port)
+	addr := cfg.Addr()
 	scheme := "http"
 	var certFile, keyFile string
 	if cfg.TLS {
@@ -129,7 +128,11 @@ func main() {
 			log.Fatalf("selftls: %v", err)
 		}
 	}
-	log.Printf("Shells v%s listening on %s://%s %s", version, scheme, addr, tokenLogNote(cfg.TokenSource))
+	var note string
+	if n := tokenLogNote(cfg.TokenSource); n != "" {
+		note = " " + n
+	}
+	log.Printf("Shells v%s listening on %s://%s%s", version, scheme, addr, note)
 	log.Printf("State dir: %s", cfg.ServerKeyDir)
 	switch cfg.SecretSource {
 	case "generated":
@@ -143,8 +146,10 @@ func main() {
 ================================================================================`, cfg.Secret, cfg.SecretFile)
 	case "file":
 		log.Printf("E2E secret: (loaded from %s — edit that file to change it)", cfg.SecretFile)
+	case "$SHELLS_SECRET", "$SECRET":
+		log.Printf("E2E secret: (from %s env; to persist instead, write it to %s)", cfg.SecretSource, cfg.SecretFile)
 	case "env":
-		log.Printf("E2E secret: (from $SECRET env; to persist instead, write it to %s)", cfg.SecretFile)
+		log.Printf("E2E secret: (from $SHELLS_SECRET env; to persist instead, write it to %s)", cfg.SecretFile)
 	default:
 		log.Printf("E2E secret: (from %s; secret file: %s)", cfg.SecretSource, cfg.SecretFile)
 	}
@@ -254,11 +259,13 @@ func main() {
 // tokenLogNote describes where the app auth token came from WITHOUT printing
 // any substring of it: tokens are bearer credentials and startup logs are
 // routinely shipped to remote aggregation, so only the source is named.
+// When auto-generated (the default), no note is printed to avoid confusing
+// operators who authenticate via E2E secret.
 func tokenLogNote(source string) string {
 	switch source {
 	case "env":
 		return "(auth token from $SHELLS_TOKEN)"
 	default:
-		return "(auth token auto-generated this launch — set $SHELLS_TOKEN to pin one)"
+		return ""
 	}
 }
