@@ -48,7 +48,7 @@ with TLS (the PWA needs HTTPS).
 
 | Variable | Default | What |
 |---|---|---|
-| `SHELLS_HOST` | `127.0.0.1` | Listen address (`0.0.0.0` for all interfaces; alias: `HOST`) |
+| `SHELLS_HOST` | `127.0.0.1` | Listen address (`0.0.0.0` for all interfaces) |
 | `SHELLS_PORT` | `2222` | Listen port (alias: `PORT`) |
 | `SHELLS_SECRET` | random | E2E shared secret — **set this** (alias: `SECRET`) |
 | `SHELLS_MAX_SESSIONS` | `200` | Max concurrent shells (alias: `MAX_SESSIONS`) |

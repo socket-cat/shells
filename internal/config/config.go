@@ -284,8 +284,9 @@ func EnvTrue(v string) bool {
 
 // ListenHost is the single shared resolver for the listen address: the
 // self-update pre-flight must probe exactly the host the staged child binds.
+// No generic HOST alias: tcsh/csh export HOST=<hostname> into every child.
 func ListenHost() string {
-	return firstNonEmpty(os.Getenv("SHELLS_HOST"), os.Getenv("HOST"), "127.0.0.1")
+	return firstNonEmpty(os.Getenv("SHELLS_HOST"), "127.0.0.1")
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -67,18 +67,17 @@ func TestHostResolution(t *testing.T) {
 		t.Errorf("default Host = %q, want 127.0.0.1", cfg.Host)
 	}
 
-	// Case 2: HOST env var
+	// Case 2: generic HOST is ignored (tcsh/csh export HOST=<hostname>)
 	t.Setenv("HOST", "0.0.0.0")
 	cfg, err = Load("test")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if cfg.Host != "0.0.0.0" {
-		t.Errorf("HOST override = %q, want 0.0.0.0", cfg.Host)
+	if cfg.Host != "127.0.0.1" {
+		t.Errorf("inherited HOST changed Host to %q, want 127.0.0.1", cfg.Host)
 	}
 
-	// Case 3: SHELLS_HOST env var when HOST unset
-	t.Setenv("HOST", "")
+	// Case 3: SHELLS_HOST env var
 	t.Setenv("SHELLS_HOST", "192.168.1.100")
 	cfg, err = Load("test")
 	if err != nil {
@@ -86,17 +85,6 @@ func TestHostResolution(t *testing.T) {
 	}
 	if cfg.Host != "192.168.1.100" {
 		t.Errorf("SHELLS_HOST override = %q, want 192.168.1.100", cfg.Host)
-	}
-
-	// Case 4: SHELLS_HOST takes precedence over HOST
-	t.Setenv("HOST", "0.0.0.0")
-	t.Setenv("SHELLS_HOST", "192.168.1.100")
-	cfg, err = Load("test")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if cfg.Host != "192.168.1.100" {
-		t.Errorf("SHELLS_HOST priority = %q, want 192.168.1.100", cfg.Host)
 	}
 }
 
