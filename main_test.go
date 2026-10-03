@@ -67,3 +67,24 @@ func TestTokenLogNoteRedacts(t *testing.T) {
 		t.Fatalf("tokenLogNote(generated) = %q, want empty", got)
 	}
 }
+
+// TestDropHandshakeEOF: probe-induced handshake EOFs are dropped, real
+// handshake failures and other server errors pass through unchanged.
+func TestDropHandshakeEOF(t *testing.T) {
+	var buf bytes.Buffer
+	w := dropHandshakeEOF{&buf}
+	drop := "2026/10/03 23:18:11 http: TLS handshake error from 127.0.0.1:43094: EOF\n"
+	keep := []string{
+		"2026/10/03 23:18:12 http: TLS handshake error from 10.0.0.5:5000: remote error: tls: bad certificate\n",
+		"2026/10/03 23:18:13 http: TLS handshake error from 10.0.0.5:5001: tls: client offered only unsupported versions: []\n",
+		"2026/10/03 23:18:14 http: panic serving 10.0.0.5:5002: boom\n",
+	}
+	for _, l := range append([]string{drop}, keep...) {
+		if n, err := w.Write([]byte(l)); n != len(l) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", l, n, err)
+		}
+	}
+	if got, want := buf.String(), strings.Join(keep, ""); got != want {
+		t.Fatalf("filtered output:\n%s\nwant:\n%s", got, want)
+	}
+}

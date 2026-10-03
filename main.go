@@ -8,10 +8,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"embed"
 	"errors"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -222,6 +224,7 @@ func main() {
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second, // headers only; does not cap long-lived WS
 		IdleTimeout:       120 * time.Second,
+		ErrorLog:          log.New(dropHandshakeEOF{log.Writer()}, "", log.Flags()),
 	}
 	// HTTP/1.1 only: scripts/build.sh omits net/http's HTTP/2 (nethttpomithttp2),
 	// but Go would still advertise "h2" via ALPN and browsers would fail.
@@ -254,6 +257,18 @@ func main() {
 		}
 		log.Fatalf("server: %v", serveErr)
 	}
+}
+
+// dropHandshakeEOF drops net/http's "TLS handshake error ...: EOF" lines: a
+// liveness probe (TCP connect + close, e.g. the socket.cat relay) logs one per
+// check forever. Real handshake failures (bad cert, protocol) still pass.
+type dropHandshakeEOF struct{ w io.Writer }
+
+func (d dropHandshakeEOF) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("TLS handshake error")) && bytes.HasSuffix(bytes.TrimSpace(p), []byte(": EOF")) {
+		return len(p), nil
+	}
+	return d.w.Write(p)
 }
 
 // tokenLogNote describes where the app auth token came from WITHOUT printing
