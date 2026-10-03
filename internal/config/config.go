@@ -39,7 +39,7 @@ const (
 // shells.
 var ShellEnvKeys = []string{
 	"HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "PWD",
-	"SHELL", "SHLVL", "TERM", "USER", "USERNAME",
+	"SHELL", "SHLVL", "USER", "USERNAME",
 }
 
 // NonReplayableDecModes lists DEC private modes whose reset must not be

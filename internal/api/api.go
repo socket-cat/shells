@@ -68,7 +68,7 @@ const exitCodeRestart = 42
 
 // New creates an API handler.
 func New(cfg *config.Config, mgr *session.Manager, authStore *auth.Store, sshMgr *ssh.Manager, brand *branding.Store) *Handler {
-	return &Handler{
+	h := &Handler{
 		cfg:         cfg,
 		manager:     mgr,
 		auth:        authStore,
@@ -77,6 +77,11 @@ func New(cfg *config.Config, mgr *session.Manager, authStore *auth.Store, sshMgr
 		startTime:   time.Now(),
 		rateLimiter: util.NewRateLimiter(),
 	}
+	if mgr != nil {
+		mgr.OnDestroy(h.cleanupSessionPastes)
+	}
+	SweepStalePastes(6 * time.Hour)
+	return h
 }
 
 // ServeHTTP routes the request.
@@ -198,6 +203,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request, body map[string]
 		h.handleUpdateCheck(w, r, body)
 	case path == "/api/update":
 		h.handleUpdate(w, r)
+	case path == "/api/paste-image":
+		h.handlePasteImage(w, r, body)
 	default:
 		util.SendJSON(w, 404, map[string]any{"error": "Not found"}, nil)
 	}
@@ -562,7 +569,11 @@ func getToken(r *http.Request) string {
 }
 
 func decryptBody(apiKey []byte, r *http.Request) (map[string]any, error) {
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	limit := int64(65536)
+	if r.URL.Path == "/api/paste-image" {
+		limit = 15 << 20 // 15 MB for image uploads
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, limit))
 	if err != nil {
 		return nil, err
 	}

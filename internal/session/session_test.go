@@ -421,3 +421,27 @@ func TestDestroyAllSkipsSessionAlreadyBeingDestroyed(t *testing.T) {
 		t.Fatalf("onDestroy fired %d times, want 1", got)
 	}
 }
+
+func TestBuildShellEnvTERM(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	t.Setenv("COLORTERM", "none")
+	cfg := &config.Config{
+		ShellEnvKeys: []string{"HOME", "PATH", "TERM", "COLORTERM"},
+	}
+	env := buildShellEnv(cfg, "/bin/bash", "/tmp")
+	var termVal, colortermVal string
+	for _, e := range env {
+		if strings.HasPrefix(e, "TERM=") {
+			termVal = strings.TrimPrefix(e, "TERM=")
+		}
+		if strings.HasPrefix(e, "COLORTERM=") {
+			colortermVal = strings.TrimPrefix(e, "COLORTERM=")
+		}
+	}
+	if termVal != "xterm-256color" {
+		t.Fatalf("expected TERM=xterm-256color, got %s", termVal)
+	}
+	if colortermVal != "truecolor" {
+		t.Fatalf("expected COLORTERM=truecolor, got %s", colortermVal)
+	}
+}

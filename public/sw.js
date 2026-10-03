@@ -50,6 +50,7 @@ const STATIC_ASSETS = [
   '/js/shell/loadscreen.js',
   '/js/shell/scaling.js',
   '/js/shell/backends.js',
+  '/js/shell/paste.js',
   '/js/theme.js',
   '/js/theme-templates.js',
   '/js/grid-resizer.js',

@@ -34,7 +34,10 @@ window.ShellsCrypto = (function () {
   function toB64(buf) {
     const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
     let s = '';
-    for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    const chunk = 8192;
+    for (let i = 0; i < b.length; i += chunk) {
+      s += String.fromCharCode.apply(null, b.subarray(i, i + chunk));
+    }
     return btoa(s);
   }
 

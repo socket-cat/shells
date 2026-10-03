@@ -72,6 +72,7 @@ type Session struct {
 	Title        string
 	DefaultTitle string
 	IsRemote     bool
+	Backend      *Backend
 	CreatedAt    int64
 	Clients      int
 
@@ -116,7 +117,7 @@ type Manager struct {
 	sessions map[string]*Session
 
 	onCreate  func(*Session)
-	onDestroy func(string)
+	onDestroy []func(string)
 
 	// SpawnSSH, if set, launches an SSH-backed terminal. Set by the ssh
 	// package after registration to avoid an import cycle.
@@ -151,7 +152,11 @@ func New(cfg *config.Config) (*Manager, error) {
 func (m *Manager) OnCreate(fn func(*Session)) { m.onCreate = fn }
 
 // OnDestroy registers a callback fired after a session is destroyed.
-func (m *Manager) OnDestroy(fn func(string)) { m.onDestroy = fn }
+func (m *Manager) OnDestroy(fn func(string)) {
+	if fn != nil {
+		m.onDestroy = append(m.onDestroy, fn)
+	}
+}
 
 // Get returns the session with the given ID, or nil.
 func (m *Manager) Get(id string) *Session {
@@ -296,6 +301,7 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		Title:        title,
 		DefaultTitle: "shell #" + id[:8],
 		IsRemote:     isRemote,
+		Backend:      backend,
 		CreatedAt:    time.Now().UnixMilli(),
 		outputBuffer: ringbuf.New(m.cfg.OutputBufferMax),
 		activeModes:  make(map[string]bool),
@@ -430,8 +436,8 @@ func (m *Manager) destroy(s *Session) bool {
 	delete(m.sessions, s.ID)
 	m.mu.Unlock()
 
-	if m.onDestroy != nil {
-		m.onDestroy(s.ID)
+	for _, fn := range m.onDestroy {
+		fn(s.ID)
 	}
 	return true
 }
@@ -464,8 +470,10 @@ func (m *Manager) DestroyAll() {
 				s.waitForTermOps(termOpDrainWait)
 			}
 			<-s.exited // reaper confirms the child is dead (bounded by caller)
-			if owner && m.onDestroy != nil {
-				m.onDestroy(s.ID)
+			if owner {
+				for _, fn := range m.onDestroy {
+					fn(s.ID)
+				}
 			}
 		}(s)
 	}
@@ -659,6 +667,9 @@ func buildShellEnv(cfg *config.Config, shell, workingDir string) []string {
 		"COLORTERM=truecolor",
 	}
 	for _, key := range cfg.ShellEnvKeys {
+		if key == "TERM" || key == "COLORTERM" {
+			continue // xterm-256color and truecolor are terminal constants for xterm.js
+		}
 		if key == "SHELL" && shell != "" {
 			env = append(env, "SHELL="+shell)
 		} else if val := os.Getenv(key); val != "" {

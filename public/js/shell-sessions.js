@@ -1383,6 +1383,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         }
         return false;
       }
+      // Ctrl+V, Ctrl+Shift+V, Cmd+V: let browser paste event fire naturally
+      // (prevents xterm on Linux from consuming Ctrl+V and sending raw \x16 to the PTY,
+      // which causes CLI tools like Codex to trigger broken local X11 clipboard attempts)
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyV' || e.key.toLowerCase() === 'v')) {
+        return false;
+      }
       return true;
     });
 
@@ -1397,6 +1403,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     };
     body.addEventListener('mousedown', onMiddle, true);
     body.addEventListener('mouseup', onMiddle, true);
+    body.addEventListener('paste', (e) => this._handleTerminalPaste(e, term, id), true);
+    body.addEventListener('dragover', (e) => this._handleTerminalDragOver(e), false);
+    body.addEventListener('drop', (e) => this._handleTerminalDrop(e, term, id), false);
 
     const gestureLayer = document.createElement('div');
     gestureLayer.className = 'mobile-gesture-layer';

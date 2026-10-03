@@ -5,6 +5,7 @@
 package ssh
 
 import (
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/hex"
@@ -541,4 +542,51 @@ func (m *Manager) InvalidateRemoteCache(connID string) {
 	} else {
 		m.cache = make(map[string]*remoteCacheEntry)
 	}
+}
+
+// WriteRemoteFile streams data to a file on the remote SSH host at remotePath.
+// Parent directory is created with mode 0700 and the file is written with mode 0600.
+func (m *Manager) WriteRemoteFile(ctx context.Context, b *session.Backend, remotePath string, data []byte) error {
+	if b == nil || b.Host == "" || b.User == "" {
+		return fmt.Errorf("invalid SSH backend")
+	}
+	port := b.Port
+	if port <= 0 {
+		port = 22
+	}
+	dir := filepath.Dir(remotePath)
+	cmdStr := fmt.Sprintf("mkdir -m 0700 -p %s && cat > %s && chmod 0600 %s",
+		shellEscape(dir), shellEscape(remotePath), shellEscape(remotePath))
+	args := append([]string{}, sshArgs(m.cfg.SSHKeysDir, b.ConnectionID)...)
+	args = append(args,
+		"-p", strconv.Itoa(port),
+		fmt.Sprintf("%s@%s", b.User, b.Host),
+		remoteCommand(cmdStr),
+	)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd.Stdin = bytes.NewReader(data)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ssh write file: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// RemoveRemoteFile unlinks a file on the remote SSH host.
+func (m *Manager) RemoveRemoteFile(ctx context.Context, b *session.Backend, remotePath string) error {
+	if b == nil || b.Host == "" || b.User == "" {
+		return fmt.Errorf("invalid SSH backend")
+	}
+	port := b.Port
+	if port <= 0 {
+		port = 22
+	}
+	cmdStr := fmt.Sprintf("rm -f %s", shellEscape(remotePath))
+	args := append([]string{}, sshArgs(m.cfg.SSHKeysDir, b.ConnectionID)...)
+	args = append(args,
+		"-p", strconv.Itoa(port),
+		fmt.Sprintf("%s@%s", b.User, b.Host),
+		remoteCommand(cmdStr),
+	)
+	return exec.CommandContext(ctx, "ssh", args...).Run()
 }
