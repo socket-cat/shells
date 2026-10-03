@@ -145,7 +145,7 @@ func TestMain(m *testing.M) {
 		if port == "" {
 			port = os.Getenv("PORT")
 		}
-		_ = http.ListenAndServe(":"+port, nil)
+		_ = http.ListenAndServe(net.JoinHostPort(config.ListenHost(), port), nil)
 		os.Exit(1)
 	}
 	os.Exit(m.Run())
@@ -173,6 +173,27 @@ func TestPreflightOverridesShellsPort(t *testing.T) {
 	}
 	if !preflight(self, 0, "") {
 		t.Fatal("pre-flight failed when SHELLS_PORT was exported: child collided with parent")
+	}
+}
+
+// TestPreflightProbesListenHost: the staged child binds SHELLS_HOST, so
+// pre-flight must probe that host, not a hard-coded 127.0.0.1 — otherwise any
+// non-loopback SHELLS_HOST (or inherited HOST) refuses every update.
+func TestPreflightProbesListenHost(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Skip("127.0.0.2 not bindable here:", err)
+	}
+	l.Close()
+	t.Setenv("SHELLS_HOST", "127.0.0.2")
+	t.Setenv("PREFLIGHT_HELPER", "1")
+	t.Setenv("SHELLS_TLS", "off")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preflight(self, 0, "") {
+		t.Fatal("pre-flight failed with SHELLS_HOST=127.0.0.2: probed the wrong host")
 	}
 }
 

@@ -274,7 +274,12 @@ func preflight(newBin string, testPort int, logPath string) bool {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 	}
-	url := fmt.Sprintf("%s://127.0.0.1:%d/api/health", scheme, testPort)
+	host := config.ListenHost() // the staged child inherits our env, so it binds here
+	switch host {
+	case "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	url := fmt.Sprintf("%s://%s/api/health", scheme, net.JoinHostPort(host, portStr))
 	for i := 0; i < 20; i++ {
 		resp, err := client.Get(url)
 		if err == nil {

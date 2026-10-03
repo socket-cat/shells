@@ -118,7 +118,7 @@ func Load(version string) (*Config, error) {
 	}
 	updateRepo := firstNonEmpty(os.Getenv("SHELLS_UPDATE_REPO"), "socket-cat/shells")
 	c := &Config{
-		Host:                  firstNonEmpty(os.Getenv("SHELLS_HOST"), os.Getenv("HOST"), "127.0.0.1"),
+		Host:                  ListenHost(),
 		Port:                  FirstEnvInt([]string{"SHELLS_PORT", "PORT"}, 2222),
 		KeepaliveIntervalMs:   KeepaliveIntervalMs,
 		MaxSessions:           FirstEnvInt([]string{"SHELLS_MAX_SESSIONS", "MAX_SESSIONS"}, 200),
@@ -280,6 +280,12 @@ func EnvTrue(v string) bool {
 		return true
 	}
 	return false
+}
+
+// ListenHost is the single shared resolver for the listen address: the
+// self-update pre-flight must probe exactly the host the staged child binds.
+func ListenHost() string {
+	return firstNonEmpty(os.Getenv("SHELLS_HOST"), os.Getenv("HOST"), "127.0.0.1")
 }
 
 func firstNonEmpty(vals ...string) string {
