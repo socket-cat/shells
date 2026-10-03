@@ -244,7 +244,8 @@ func preflight(newBin string, testPort int, logPath string) bool {
 	}
 	cmd := exec.Command(newBin)
 	cmd.Env = childEnv(newBin)
-	cmd.Env = setEnv(cmd.Env, "PORT", strconv.Itoa(testPort))
+	portStr := strconv.Itoa(testPort)
+	cmd.Env = setEnv(setEnv(cmd.Env, "SHELLS_PORT", portStr), "PORT", portStr)
 	if logPath != "" {
 		if f, err := os.OpenFile(logPath+".preflight", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			cmd.Stdout = f

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -134,16 +135,45 @@ func TestEnvInt(t *testing.T) {
 	}
 }
 
-// TestMain doubles as a fake "staged server" for TestPreflightFreePort: when
-// re-executed with PREFLIGHT_HELPER=1 it only answers /api/health on $PORT,
-// so pre-flight is exercised end to end without ever booting the real app.
+// TestMain doubles as a fake "staged server" for TestPreflightFreePort and
+// TestPreflightOverridesShellsPort: when re-executed with PREFLIGHT_HELPER=1
+// it only answers /api/health on its resolved port, matching config.Load.
 func TestMain(m *testing.M) {
 	if os.Getenv("PREFLIGHT_HELPER") == "1" {
 		http.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(`{"status":"healthy"}`)) })
-		_ = http.ListenAndServe(":"+os.Getenv("PORT"), nil)
+		port := os.Getenv("SHELLS_PORT")
+		if port == "" {
+			port = os.Getenv("PORT")
+		}
+		_ = http.ListenAndServe(":"+port, nil)
 		os.Exit(1)
 	}
 	os.Exit(m.Run())
+}
+
+// TestPreflightOverridesShellsPort asserts that when the parent process was
+// started with SHELLS_PORT set, pre-flight overrides both SHELLS_PORT and PORT
+// so the staged child binds the ephemeral testPort instead of colliding with
+// the parent listener.
+func TestPreflightOverridesShellsPort(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPort := l.Addr().(*net.TCPAddr).Port
+	defer l.Close() // simulate parent occupying its configured SHELLS_PORT
+
+	t.Setenv("SHELLS_PORT", strconv.Itoa(parentPort))
+	t.Setenv("PORT", strconv.Itoa(parentPort))
+	t.Setenv("PREFLIGHT_HELPER", "1")
+	t.Setenv("SHELLS_TLS", "off")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preflight(self, 0, "") {
+		t.Fatal("pre-flight failed when SHELLS_PORT was exported: child collided with parent")
+	}
 }
 
 // TestPreflightFreePort: with no TEST_PORT, pre-flight must not depend on a
