@@ -80,6 +80,16 @@ func TestHandlePasteImageLocal(t *testing.T) {
 		t.Fatalf("expected dir mode 0700, got %o", mode)
 	}
 
+	// Verify exact file content matches original raw PNG bytes
+	savedBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read saved file: %v", err)
+	}
+	rawExpected, _ := base64.StdEncoding.DecodeString(pngB64)
+	if string(savedBytes) != string(rawExpected) {
+		t.Fatalf("saved file bytes do not match expected PNG payload")
+	}
+
 	// Verify session destruction cleans up the file
 	mgr.Destroy(sess.ID)
 	// Give onDestroy a moment to run
@@ -111,6 +121,13 @@ func TestHandlePasteImageRejectsInvalid(t *testing.T) {
 	if !strings.Contains(w2.Body.String(), "empty image") {
 		t.Fatalf("expected empty image error, got %s", w2.Body.String())
 	}
+
+	// SSRF attempt to cloud metadata
+	w3 := httptest.NewRecorder()
+	h.handlePasteImage(w3, r, map[string]any{"url": "http://169.254.169.254/latest/meta-data"})
+	if !strings.Contains(w3.Body.String(), "prohibited image url host") {
+		t.Fatalf("expected prohibited image url host error, got %s", w3.Body.String())
+	}
 }
 
 func TestEvictOldest(t *testing.T) {
@@ -120,24 +137,33 @@ func TestEvictOldest(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create 5 files
+	// Create 5 files with staggered timestamps
 	for i := 0; i < 5; i++ {
 		p := filepath.Join(tmpDir, string(rune('a'+i))+".png")
-		if err := os.WriteFile(p, []byte("data"), 0600); err != nil {
+		if err := os.WriteFile(p, []byte("testdata"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(5 * time.Millisecond) // distinct mod times
+		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Call evictOldest with incoming bytes that fit within maxPasteDirBytes
+	// Subtest 1: under budget -> no eviction
 	evictOldest(tmpDir, 100)
-
-	// All 5 files should still exist since 5 < maxPasteDirFiles (50)
 	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 5 {
 		t.Fatalf("expected 5 files, got %d", len(entries))
+	}
+
+	// Subtest 2: incoming bytes exceed maxPasteDirBytes (50MB) -> evicts oldest files first
+	evictOldest(tmpDir, maxPasteDirBytes)
+	entriesAfter, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With incomingBytes == maxPasteDirBytes, totalSize must be 0 to fit, so all are evicted
+	if len(entriesAfter) != 0 {
+		t.Fatalf("expected 0 files after eviction exceeding budget, got %d", len(entriesAfter))
 	}
 }
