@@ -1803,13 +1803,14 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     return this._fontSize;
   },
 
-  // Font-size delta for a Ctrl/Cmd +/-/0 key, or null when it isn't one
-  // (Ctrl+Shift+- stays Ctrl+_ for the shell).
+  // Font-size delta for a Ctrl/Cmd +/-/0 key, or null when it isn't one.
+  // Matches the typed character, not the key position, so it works on every
+  // layout (+ and - sit elsewhere on ES/DE); Ctrl+_ stays with the shell.
   fontZoomDelta(e) {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
-    if (e.code === 'Equal' || e.code === 'NumpadAdd') return 1;
-    if ((e.code === 'Minus' && !e.shiftKey) || e.code === 'NumpadSubtract') return -1;
-    if (e.code === 'Digit0' || e.code === 'Numpad0') return 14 - this._getFontSize();
+    if (e.key === '+' || e.key === '=') return 1;
+    if (e.key === '-') return -1;
+    if (e.key === '0') return 14 - this._getFontSize();
     return null;
   },
 

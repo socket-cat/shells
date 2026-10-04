@@ -26,7 +26,7 @@ window.__APP_VERSION__ = document.body.dataset.version || '';
 const altLetter = (e, letter) => e.altKey && !e.ctrlKey && e.key.toLowerCase() === letter;
 // Ctrl+W is readline delete-word, but a browser tab closes on it: ask first. Programmatic reloads set _unloadOk.
 window.addEventListener('beforeunload', (e) => {
-  if (!window._unloadOk && window.ShellSessions?.sessions.size) e.preventDefault();
+  if (!window._unloadOk && window.ShellSessions?.sessions.size) { e.preventDefault(); e.returnValue = ''; }
 });
 window.addEventListener('keydown', (e) => {
   // Ctrl/Cmd +/-/0 zoom the terminal font, not the whole page.
