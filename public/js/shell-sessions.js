@@ -829,9 +829,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     window.TuiDialog.toast('Layout: ' + this.layoutMode.charAt(0).toUpperCase() + this.layoutMode.slice(1), 'success');
   },
 
-  cycleLayout(triggerEl) {
+  cycleLayout() {
     if (window.ShellLayout && window.ShellLayout.picker) {
-      window.ShellLayout.picker.open(triggerEl);
+      window.ShellLayout.picker.open();
     }
   },
 
@@ -1652,6 +1652,19 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     this.updateSleepState();
     this._ensureFullscreenMobile(id);
     if (session?.term) window._focusWithoutScroll(session.term);
+  },
+
+  // Typing goes back to the active terminal once a dialog, picker or the
+  // switcher closes, unless another overlay or text field took focus. On
+  // mobile term.focus is a no-op, so this never pops the soft keyboard.
+  refocus() {
+    requestAnimationFrame(() => {
+      const ae = document.activeElement;
+      if (ae && ae !== document.body && (ae.closest('.tui-overlay, #shell-switcher')
+        || (['INPUT', 'TEXTAREA'].includes(ae.tagName) && !ae.classList.contains('xterm-helper-textarea')))) return;
+      const term = this.sessions.get(this.activeId)?.term;
+      if (term) window._focusWithoutScroll(term);
+    });
   },
 
   _ensureFullscreenMobile(id) {

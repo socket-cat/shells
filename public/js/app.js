@@ -101,16 +101,16 @@ document.getElementById('shell-grid').addEventListener('click', (e) => {
   const newBtn = e.target.closest('[data-action="new-shell"]');
   if (newBtn) { window.ShellSessions.promptCreate(); return; }
   const layoutBtn = e.target.closest('[data-action="cycle-layout"]');
-  if (layoutBtn) { window.ShellSessions.cycleLayout(layoutBtn); return; }
+  if (layoutBtn) { window.ShellSessions.cycleLayout(); return; }
   const promoteBtn = e.target.closest('[data-action="promote-master"]');
   if (promoteBtn) { window.ShellSessions.promoteToMaster(promoteBtn.dataset.shellId); return; }
   const kbBtn = e.target.closest('[data-action="open-keyboard"]');
-  if (kbBtn) { window.ShellKeyboard.open(kbBtn); return; }
+  if (kbBtn) { window.ShellKeyboard.open(); return; }
   const searchBtn = e.target.closest('[data-action="open-search"]');
   if (searchBtn) { window.ShellSessions.openSearch(); return; }
   const themeBtn = e.target.closest('[data-action="toggle-theme"]');
   if (themeBtn) {
-    window.ShellTheme.toggle(themeBtn);
+    window.ShellTheme.toggle();
     return;
   }
   const fontMinusBtn = e.target.closest('[data-action="font-minus"]');

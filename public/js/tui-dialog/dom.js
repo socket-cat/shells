@@ -114,5 +114,6 @@ window.TuiDialog = Object.assign(window.TuiDialog, {
   _cleanup(overlay, unbind) {
     unbind();
     overlay.remove();
+    window.ShellSessions?.refocus();
   },
 });

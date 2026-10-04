@@ -74,7 +74,7 @@ window.ShellLayout = {
       { id: 'grid', label: 'Grid', desc: 'Tiled grid of terminals.' },
     ],
 
-    open(triggerEl) {
+    open() {
       const currentId = window.ShellSessions.layoutMode || 'auto';
       const options = this.modes.map((m) => ({
         value: m.id,
@@ -91,8 +91,6 @@ window.ShellLayout = {
         onApply: (layoutId) => {
           window.ShellSessions.setLayout(layoutId);
         },
-      }).then(() => {
-        if (triggerEl && typeof triggerEl.focus === 'function') triggerEl.focus();
       });
     },
   },

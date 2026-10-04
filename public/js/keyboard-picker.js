@@ -65,7 +65,7 @@ window.ShellKeyboard = {
     }
   },
 
-  open(triggerEl) {
+  open() {
     const existing = document.getElementById('keyboard-overlay');
     if (existing) existing.remove();
 
@@ -80,7 +80,7 @@ window.ShellKeyboard = {
     const close = () => {
       document.removeEventListener('keydown', keyHandler);
       overlay.remove();
-      if (triggerEl && typeof triggerEl.focus === 'function') triggerEl.focus();
+      window.ShellSessions.refocus();
     };
 
     const header = TuiDialog._createHeader('Special Keys', close);

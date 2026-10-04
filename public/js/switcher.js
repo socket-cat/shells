@@ -232,6 +232,7 @@ window.ShellSwitcher = {
     overlay.classList.remove('visible');
     setTimeout(() => {
       overlay.remove();
+      window.ShellSessions.refocus();
     }, 200);
     this.visible = false;
   },

@@ -188,7 +188,7 @@ window.ShellTheme = {
     return this._themeById(id) || this._themeById('dark');
   },
 
-  async openPicker(triggerEl) {
+  async openPicker() {
     const box = document.createElement('div');
     // min-width:0 + width:100% so the content never overflows the dialog on
     // narrow (mobile) viewports — a fixed min-width clips on the right.
@@ -338,11 +338,10 @@ window.ShellTheme = {
       },
     });
 
-    if (triggerEl && typeof triggerEl.focus === 'function') triggerEl.focus();
   },
 
-  async toggle(triggerEl) {
-    await this.openPicker(triggerEl);
+  async toggle() {
+    await this.openPicker();
   },
 
   applyAccent(color, silent) {
