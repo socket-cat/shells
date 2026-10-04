@@ -6,17 +6,17 @@ package main
 import (
 	"bytes"
 	"io/fs"
-	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"shells/internal/assets"
 	"shells/internal/static"
 )
 
 // TestEmbeddedAssetsFresh fails when the embedded publicgz/ no longer matches
-// public/ (edited frontend without `go generate`): the binary would ship
-// stale assets.
+// the file set built from public/ (edited frontend without `go generate`):
+// the binary would ship stale assets.
 func TestEmbeddedAssetsFresh(t *testing.T) {
 	sub, err := fs.Sub(embedPublic, "publicgz")
 	if err != nil {
@@ -26,24 +26,17 @@ func TestEmbeddedAssetsFresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := os.DirFS("public")
-	n := 0
-	err = fs.WalkDir(want, ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		n++
-		w, _ := fs.ReadFile(want, p)
-		if g, err := fs.ReadFile(got, p); err != nil || !bytes.Equal(g, w) {
-			t.Errorf("%s: embedded copy stale or missing — run `go generate .`", p)
-		}
-		return nil
-	})
+	want, err := assets.Build("public")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if files := len(got.(fstest.MapFS)); n == 0 || files != n {
-		t.Errorf("embedded has %d files, public/ has %d — run `go generate .`", files, n)
+	for p, w := range want {
+		if g, err := fs.ReadFile(got, p); err != nil || !bytes.Equal(g, w) {
+			t.Errorf("%s: embedded copy stale or missing — run `go generate .`", p)
+		}
+	}
+	if files := len(got.(fstest.MapFS)); len(want) == 0 || files != len(want) {
+		t.Errorf("embedded has %d files, want %d — run `go generate .`", files, len(want))
 	}
 }
 
