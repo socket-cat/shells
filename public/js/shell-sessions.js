@@ -580,7 +580,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
                 // skip the server-side reset + full replay (no jump-to-top).
                 const resumed = new Set(this.sessions.keys());
 
-                await new Promise(r => setTimeout(r, 50));
                 await this.sync();
 
                 for (const [sid, s] of this.sessions) {
@@ -756,10 +755,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
    */
   async sync() {
     try {
-      const { ok, data: list } = await this.encryptedFetch('/api/sessions', { _method: 'GET' });
+      // Parallel: the SSH list only feeds badges at mount, one RTT saved.
+      const [{ ok, data: list }] = await Promise.all([
+        this.encryptedFetch('/api/sessions', { _method: 'GET' }),
+        this.fetchSshConnections(),
+      ]);
       if (!ok) return;
-
-      await this.fetchSshConnections();
 
       // Update existing or add new
       for (const s of list) {
