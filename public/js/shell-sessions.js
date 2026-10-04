@@ -261,59 +261,31 @@ window._focusWithoutScroll = function(term) {
  * @property {boolean} [mounting] - Internal flag
  */
 
-// Printable-byte thresholds for recognizing genuine terminal output. A resize
-// or prompt redraw is escape-heavy and carries few printable bytes, so gating
-// activity on printable volume suppresses those false positives without any
-// resize/time-based plumbing. ARM_CHARS gates the per-frame pulse; RUN_MIN_CHARS
-// gates the completion bell (the run only rings if it produced real output volume,
-// not just elapsed time — a sustained but low-volume redraw still can't ring it).
-const ARM_CHARS = 20;
-const RUN_MIN_CHARS = 400;
-// Output is only recognized as real activity (pulse + run tracking) once the
-// user has been silent for INPUT_IDLE_MS. While you're typing into a shell,
-// its echo arrives within this window and is ignored; process output that
-// arrives after it is genuine (compile/htop/etc.) — active or background.
+// Idle bell: ring when a screen that was continuously redrawing goes silent —
+// an agent CLI (spinner, timer, effects) finishing or asking a question. A run
+// is output frames with gaps ≤ RUN_GAP_MS; it rings once it has been silent for
+// RUN_GAP_MS, if it lasted ≥ MIN_RUN_MS and the user didn't end it by typing.
+// One-shot bursts (resize repaint, reattach/resume replay) and periodic output
+// (watch -n 5) never form a run, so they can't ring.
+const RUN_GAP_MS = 2500;
+const MIN_RUN_MS = 8000;
+// Output within INPUT_IDLE_MS of a keystroke is echo, not activity.
 const INPUT_IDLE_MS = 5000;
 // After any bell sound the session is muted for BELL_COOLDOWN_MS, so a runaway
 // stream of BELs (\a) can't beep-spam. The latched attention icon still shows.
 const BELL_COOLDOWN_MS = 1500;
 
-// Count printable bytes in a VT frame, stripping CSI/OSC/DCS/SOS/PM/APC escape
-// sequences and C0/DEL controls. Stops once `cap` printable bytes are seen, so
-// the "did this frame carry enough real output?" decision is bounded regardless
-// of frame size. Pure byte walk — no allocation, no string decode.
-function countPrintable(buf, cap) {
-  const n = buf.length;
-  let count = 0;
-  let i = 0;
-  while (i < n) {
-    const b = buf[i];
-    if (b === 0x1b) {
-      const c = i + 1 < n ? buf[i + 1] : 0;
-      if (c === 0x5b) {              // CSI: ESC '[' ... 0x40-0x7e
-        i += 2;
-        while (i < n && (buf[i] < 0x40 || buf[i] > 0x7e)) i++;
-        i++;
-      } else if (c === 0x5d) {       // OSC: ESC ']' ... BEL | ST
-        i += 2;
-        while (i < n && buf[i] !== 0x07 && !(buf[i] === 0x1b && i + 1 < n && buf[i + 1] === 0x5c)) i++;
-        i += (i < n && buf[i] === 0x07) ? 1 : 2;
-      } else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) { // DCS/SOS/PM/APC ... ST
-        i += 2;
-        while (i < n && !(buf[i] === 0x1b && i + 1 < n && buf[i + 1] === 0x5c)) i++;
-        i += 2;
-      } else {
-        i += 2;                       // bare ESC + one byte
-      }
-      continue;
-    }
-    if (b >= 0x20 && b !== 0x7f) {   // printable ASCII or non-ASCII (>= 0x80)
-      count++;
-      if (count >= cap) return count;
-    }
-    i++;                             // C0 control or DEL: skip
+// Advance a session's run state; `frame` = output arrived now. Returns true when
+// a run just ended that should ring. Frame-driven too, so a throttled timer in a
+// background tab can't drop a ring by missing the gap.
+function runTick(s, now, frame) {
+  let ring = false;
+  if (s._runStart && now - s.lastOutputAt >= RUN_GAP_MS) {
+    ring = s.lastOutputAt - s._runStart >= MIN_RUN_MS && s.lastInputAt <= s.lastOutputAt;
+    s._runStart = 0;
   }
-  return count;
+  if (frame) { if (!s._runStart) s._runStart = now; s.lastOutputAt = now; }
+  return ring;
 }
 
 window.ShellSessions = {
@@ -440,7 +412,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
               if (this._wsReady) {
                 const session = this.sessions.get(sid);
               if (session) {
-                this._noteOutput(session, countPrintable(payload, RUN_MIN_CHARS));
+                this._noteOutput(sid, session);
                 session.term.write(payload, () => {
                   if (this._pendingSwitcherSessions) this._checkAllReady();
                 });
@@ -659,7 +631,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
             } else if (inner.type === 'reset') {
               session.term.reset();
             } else if (inner.type === 'activity') {
-              this._noteOutput(session, inner.bytes | 0);
+              if (inner.bytes > 0) this._noteOutput(inner.sid, session);
             } else if (inner.type === 'exit') {
               if (session.remotelyClosed) return;
               this._showTuiStatus(inner.sid, `Process Exited (code ${inner.exitCode}) · Click to discard`, 'error');
@@ -961,30 +933,14 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     return null;
   },
 
-  // Per-second evaluator. Two windows, decoupled:
-  //  • PULSE_MS — badge pulse ("running now"). Snappy so a finished shell
-  //    clears quickly.
-  //  • RUN_GRACE_MS — run tracking for the completion bell. Longer than the
-  //    refresh interval of slow apps (top refreshes every ~3s on Linux) so a
-  //    continuous run doesn't oscillate busy/idle and reset the run timer.
-  // The bell fires on run-end (busy→idle after RUN_GRACE_MS of silence) only
-  // if the run lasted ≥ MIN_RUN_MS AND produced ≥ RUN_MIN_CHARS printable output
-  // (see countPrintable) — so a resize/prompt redraw, which is escape-heavy and
-  // carries little printable volume, can't ring it. Only real activity arms the
-  // run (see INPUT_IDLE_MS: output echoing your own typing is ignored), so a
-  // process running in the active terminal also notifies on completion. The
-  // accent bell icon latches on until the shell is activated (attention marker);
-  // BELL_COOLDOWN_MS then mutes the session so a BEL stream can't beep-spam.
-  // Output-only heuristic: silent commands (sleep, idle vim) read as idle.
-  // While a session is paused its output is buffered server-side and only
-  // rate-limited `activity` heartbeats arrive, so the run heuristic keeps
-  // tracking runs through the pause and can ring on real completion of a
-  // blurred terminal.
+  // Per-second evaluator: badge pulse ("running now", PULSE_MS) and the idle
+  // bell (see runTick). The accent bell icon latches on until the shell is
+  // activated (attention marker). While a session is paused its output is
+  // buffered server-side and only ≤1s `activity` heartbeats arrive, which keep
+  // the run continuous, so a blurred agent still rings when it goes idle.
   _evalBusy() {
     const now = Date.now();
     const PULSE_MS = 1500;
-    const RUN_GRACE_MS = 9000;
-    const MIN_RUN_MS = 10000;
     const fsBar = document.querySelector('.fs-tab-bar');
     for (const [id, s] of this.sessions) {
       if (!s.term || !s.tile) continue;
@@ -998,18 +954,14 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       if (card) card.classList.toggle('switcher-card--bell', s._bellLatched);
       const fsTab = fsBar ? fsBar.querySelector(`.fs-tab[data-session-id="${id}"]`) : null;
       if (fsTab) fsTab.classList.toggle('fs-tab--bell', s._bellLatched);
-      const inRun = now - s.lastOutputAt < RUN_GRACE_MS;
-      if (inRun && !s._inRun) { s._runStart = now; s.runPrintable = 0; }
-      if (s._inRun && !inRun && now - s._runStart >= MIN_RUN_MS && s.runPrintable >= RUN_MIN_CHARS) this._ringBell(id, s);
-      s._inRun = inRun;
+      if (runTick(s, now, false)) this._ringBell(id, s);
     }
   },
 
-  _noteOutput(session, count) {
-    if (count >= ARM_CHARS && Date.now() - (session.lastInputAt || 0) >= INPUT_IDLE_MS) {
-      session.lastOutputAt = Date.now();
-      session.runPrintable = Math.min(RUN_MIN_CHARS, session.runPrintable + count);
-    }
+  _noteOutput(id, session) {
+    const now = Date.now();
+    if (now - session.lastInputAt < INPUT_IDLE_MS) return;
+    if (runTick(session, now, true)) this._ringBell(id, session);
   },
 
   _ringBell(id, s) {
@@ -1570,7 +1522,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     });
     ro.observe(body);
 
-    const session = { term, fitAddon, searchAddon, tile, cwd, ro, backendBadge: backendBadge || null, isAsleep: false, title: title || `shell #${id}`, _suppressBellUntil: Date.now() + 3000, _scaleFactor: 1.0, _cachedBodyRect: null, lastOutputAt: 0, _busy: false, _inRun: false, _runStart: 0, runPrintable: 0, lastInputAt: 0, _bellLatched: false, _fitSettle: null };
+    const session = { term, fitAddon, searchAddon, tile, cwd, ro, backendBadge: backendBadge || null, isAsleep: false, title: title || `shell #${id}`, _suppressBellUntil: Date.now() + 3000, _scaleFactor: 1.0, _cachedBodyRect: null, lastOutputAt: 0, _busy: false, _runStart: 0, lastInputAt: 0, _bellLatched: false, _fitSettle: null };
 
     term.onBell(() => this._ringBell(id, session));
 
