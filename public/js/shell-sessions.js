@@ -1685,6 +1685,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       session.tile.style.height = '';
       this._removeFsTabs(session.tile);
     } else {
+      if (id !== this.activeId) this.setActive(id); // the fullscreen shell is the one you type into
       this._renderFsTabs(session.tile);
     }
     this.updateSleepState();
