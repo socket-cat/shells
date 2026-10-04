@@ -1373,6 +1373,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         const textarea = term.element?.querySelector('textarea.xterm-helper-textarea');
         if (textarea) {
           textarea.setAttribute('autocapitalize', 'none');
+          textarea.setAttribute('inputmode', 'url');
+          textarea.setAttribute('enterkeyhint', 'enter'); // url mode drops multi-line, so Chrome would make Enter "next" (jumps to #cmd-input)
           textarea.focus = () => {};
           // xterm treats Android as Linux: every selection runs textarea.select() (primary-selection hook), which focuses natively and toggles the keyboard
           textarea.select = () => {};
