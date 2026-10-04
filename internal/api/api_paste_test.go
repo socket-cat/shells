@@ -4,6 +4,8 @@ package api
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -104,13 +106,14 @@ func TestHandlePasteImageRejectsInvalid(t *testing.T) {
 	cfg := &config.Config{OutputBufferMax: 1000}
 	h := New(cfg, nil, nil, nil, nil)
 
-	// Non-image text
+	// URL fetch of a non-image is rejected (uploads may be any type, URLs may not)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("hello plain text"))
+	}))
+	defer srv.Close()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/paste-image", nil)
-	body := map[string]any{
-		"image": base64.StdEncoding.EncodeToString([]byte("hello plain text")),
-	}
-	h.handlePasteImage(w, r, body)
+	h.handlePasteImage(w, r, map[string]any{"url": srv.URL})
 	if !strings.Contains(w.Body.String(), "unsupported image format") {
 		t.Fatalf("expected unsupported image format error, got %s", w.Body.String())
 	}
@@ -165,5 +168,46 @@ func TestEvictOldest(t *testing.T) {
 	// With incomingBytes == maxPasteDirBytes, totalSize must be 0 to fit, so all are evicted
 	if len(entriesAfter) != 0 {
 		t.Fatalf("expected 0 files after eviction exceeding budget, got %d", len(entriesAfter))
+	}
+}
+
+func TestHandlePasteAnyFile(t *testing.T) {
+	h := New(&config.Config{OutputBufferMax: 1000}, nil, nil, nil, nil)
+	for name, want := range map[string]string{
+		"report.XLSX":    ".xlsx",
+		"../../x.sh;rm":  "",
+		"a.toolongext12": "",
+		"":               "",
+	} {
+		w := httptest.NewRecorder()
+		h.handlePasteImage(w, httptest.NewRequest("POST", "/api/paste-image", nil), map[string]any{
+			"image": base64.StdEncoding.EncodeToString([]byte("PK\x03\x04 not an image")),
+			"name":  name,
+		})
+		var resp struct{ Path, Error string }
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp.Path == "" || filepath.Dir(resp.Path) != pasteDir() || filepath.Ext(resp.Path) != want {
+			t.Fatalf("name %q: want ext %q in %s, got %s", name, want, pasteDir(), w.Body.String())
+		}
+		_ = os.Remove(resp.Path)
+	}
+}
+
+func TestSecurePasteDir(t *testing.T) {
+	base := t.TempDir()
+	good := filepath.Join(base, "good")
+	_ = os.Mkdir(good, 0777)
+	if err := securePasteDir(good); err != nil {
+		t.Fatalf("own dir should be accepted (and tightened): %v", err)
+	}
+	link := filepath.Join(base, "link")
+	_ = os.Symlink(good, link)
+	if securePasteDir(link) == nil {
+		t.Fatal("symlinked dir must be refused")
+	}
+	file := filepath.Join(base, "file")
+	_ = os.WriteFile(file, nil, 0600)
+	if securePasteDir(file) == nil {
+		t.Fatal("non-dir must be refused")
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"shells/internal/session"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	maxPasteImageBytes = 10 * 1024 * 1024 // 10 MB per image
+	maxPasteImageBytes = 10 * 1024 * 1024 // 10 MB per file
 	maxPasteDirBytes   = 50 * 1024 * 1024 // 50 MB total ring buffer cap
 	maxPasteDirFiles   = 50               // 50 files cap
 	pasteIDChars       = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -42,8 +43,32 @@ func pasteDir() string {
 	return fmt.Sprintf("/tmp/s-%d", os.Getuid())
 }
 
-// handlePasteImage receives an encrypted base64 image or image URL, validates format
-// and size, enforces the 50MB FIFO ring buffer, writes the file with mode 0600,
+// securePasteDir refuses a paste dir another local user could control: /tmp is
+// shared, so /tmp/s-<uid> may have been pre-created (or symlinked) by someone
+// else to swap files before the CLI reads them.
+func securePasteDir(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || !ok || int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("unsafe paste dir %s", dir)
+	}
+	return os.Chmod(dir, 0700)
+}
+
+// pasteExt turns a client file name into a safe extension: ".[a-z0-9]{1,8}" or "".
+func pasteExt(name string) string {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
+	if ext == "" || len(ext) > 8 || !util.OnlyChars(ext, "abcdefghijklmnopqrstuvwxyz0123456789") {
+		return ""
+	}
+	return "." + ext
+}
+
+// handlePasteImage receives an encrypted base64 file (any type) or image URL,
+// validates size (URL fetches must be images), enforces the 50MB FIFO ring buffer, writes the file with mode 0600,
 // tracks it by session ID, and returns the ultra-short path.
 func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	imgData, _ := body["image"].(string)
@@ -108,14 +133,14 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 		return
 	}
 	if len(raw) > maxPasteImageBytes {
-		util.SendJSON(w, 200, map[string]any{"error": "image too large (max 10MB)"}, nil)
+		util.SendJSON(w, 200, map[string]any{"error": "file too large (max 10MB)"}, nil)
 		return
 	}
 
-	// Validate MIME type against magic bytes
-	mime := http.DetectContentType(raw)
+	// Magic bytes name images; uploads may be any type and prefer the client's
+	// (cleaned) extension. URL fetches must be images.
 	ext := ""
-	switch {
+	switch mime := http.DetectContentType(raw); {
 	case strings.HasPrefix(mime, "image/png"):
 		ext = ".png"
 	case strings.HasPrefix(mime, "image/jpeg"):
@@ -124,7 +149,10 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 		ext = ".webp"
 	case strings.HasPrefix(mime, "image/gif"):
 		ext = ".gif"
-	default:
+	}
+	if name, _ := body["name"].(string); imgData != "" && pasteExt(name) != "" {
+		ext = pasteExt(name)
+	} else if imgData == "" && ext == "" {
 		util.SendJSON(w, 200, map[string]any{"error": "unsupported image format"}, nil)
 		return
 	}
@@ -152,7 +180,7 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 		defer cancel()
 
 		if err := h.sshMgr.WriteRemoteFile(ctx, remoteBackend, remotePath, raw); err != nil {
-			util.SendJSON(w, 200, map[string]any{"error": "failed to save remote image: " + err.Error()}, nil)
+			util.SendJSON(w, 200, map[string]any{"error": "failed to save remote file: " + err.Error()}, nil)
 			return
 		}
 
@@ -166,11 +194,10 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 
 	// Local session
 	dir := pasteDir()
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil || securePasteDir(dir) != nil {
 		util.SendJSON(w, 200, map[string]any{"error": "failed to prepare storage"}, nil)
 		return
 	}
-	_ = os.Chmod(dir, 0700)
 
 	pasteMu.Lock()
 	defer pasteMu.Unlock()
@@ -197,7 +224,7 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 
 	if _, err := f.Write(raw); err != nil {
 		_ = os.Remove(path)
-		util.SendJSON(w, 200, map[string]any{"error": "failed to save image"}, nil)
+		util.SendJSON(w, 200, map[string]any{"error": "failed to save file"}, nil)
 		return
 	}
 

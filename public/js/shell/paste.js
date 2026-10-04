@@ -16,23 +16,21 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// ── Image & Rich Clipboard Paste ──
-// Intercepts clipboard paste on xterm tiles to prevent fallback camera
-// emojis (📷) and upload images via /api/paste-image, inserting ultra-short
-// paths (/tmp/s-<uid>/xxxx.png) directly into the terminal prompt.
+// ── File & Rich Clipboard Paste ──
+// Intercepts clipboard paste / drop on xterm tiles to prevent fallback camera
+// emojis (📷) and upload files (any type) via /api/paste-image, inserting
+// ultra-short paths (/tmp/s-<uid>/xxxx.xlsx) directly into the terminal prompt.
 
 window.ShellSessions = Object.assign(window.ShellSessions, {
   async _handleTerminalPaste(e, term, sessionId) {
     const cd = e.clipboardData;
     if (!cd) return;
 
-    // Collect image files from files or items
-    const rawFiles = Array.from(cd.files || []);
-    const rawItems = Array.from(cd.items || []);
-    const imageBlobs = rawFiles.filter((f) => f.type && f.type.startsWith('image/'));
+    // Collect files (any type) from files, or images from items
+    const imageBlobs = Array.from(cd.files || []);
     if (imageBlobs.length === 0) {
-      for (const item of rawItems) {
-        if (item.type && item.type.startsWith('image/')) {
+      for (const item of Array.from(cd.items || [])) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
           const file = item.getAsFile();
           if (file) imageBlobs.push(file);
         }
@@ -48,7 +46,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       return;
     }
 
-    // Image detected: suppress fallback camera emoji (📷)
+    // File detected: suppress fallback camera emoji (📷)
     e.preventDefault();
     e.stopPropagation();
 
@@ -58,9 +56,11 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       return;
     }
 
-    // Branch B & C: Direct image blobs (with optional caption in text/plain)
+    // Branch B & C: Direct file blobs (with optional caption in text/plain)
     let caption = cd.getData('text/plain') || '';
     caption = caption.replace(/[\uD83D\uDCF7\uD83D\uDCF8]|\[Image\]/gi, '').trim();
+    // File managers (Finder/Explorer copy) put the file name in text/plain: not a caption
+    if (imageBlobs.some((b) => b.name === caption)) caption = '';
 
     const uploadResults = await Promise.all(
       imageBlobs.map(async (blob) => {
@@ -82,7 +82,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     }
     term.paste(pasteText);
     if (window.TuiDialog && window.TuiDialog.toast) {
-      const msg = uploadedPaths.length === 1 ? `Pasted image as ${uploadedPaths[0]}` : `Pasted ${uploadedPaths.length} images`;
+      const msg = uploadedPaths.length === 1 ? `Pasted file as ${uploadedPaths[0]}` : `Pasted ${uploadedPaths.length} files`;
       window.TuiDialog.toast(msg, 'info');
     }
   },
@@ -97,7 +97,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   async _handleTerminalDrop(e, term, sessionId) {
     const dt = e.dataTransfer;
     if (!dt) return;
-    const files = Array.from(dt.files || []).filter((f) => f.type && f.type.startsWith('image/'));
+    const files = Array.from(dt.files || []);
     if (files.length === 0) return;
 
     e.preventDefault();
@@ -118,7 +118,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     term.paste(uploadedPaths.join(' ') + ' ');
     if (window.TuiDialog && window.TuiDialog.toast) {
-      const msg = uploadedPaths.length === 1 ? `Dropped image as ${uploadedPaths[0]}` : `Dropped ${uploadedPaths.length} images`;
+      const msg = uploadedPaths.length === 1 ? `Dropped file as ${uploadedPaths[0]}` : `Dropped ${uploadedPaths.length} files`;
       window.TuiDialog.toast(msg, 'info');
     }
   },
@@ -136,7 +136,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           this.writeActive(`"${path}" `);
         }
         if (window.TuiDialog && window.TuiDialog.toast) {
-          window.TuiDialog.toast(`Attached image as ${path}`, 'info');
+          window.TuiDialog.toast(`Attached file as ${path}`, 'info');
         }
         return path;
       }
@@ -146,7 +146,27 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     return null;
   },
 
+  // Owns all upload feedback: size reject, progress for big files, any failure.
   async _uploadPasteImage(blob, sessionId) {
+    const toast = (msg, kind) => window.TuiDialog && window.TuiDialog.toast && window.TuiDialog.toast(msg, kind);
+    const label = blob.name || 'file';
+    const mb = (blob.size / 1048576).toFixed(1);
+    if (blob.size > 10 * 1048576) {
+      toast(`${label} is ${mb} MB, max 10 MB`, 'error');
+      return null;
+    }
+    if (blob.size > 1048576) toast(`Uploading ${label} (${mb} MB)…`, 'info');
+    try {
+      return await this._uploadPasteBlob(blob, sessionId);
+    } catch (err) {
+      console.error('[paste] upload failed:', err);
+      // Folders reach here: FileReader cannot read a directory entry
+      toast(`Upload of ${label} failed: ${(err && err.message) || 'unreadable (folders are not supported)'}`, 'error');
+      return null;
+    }
+  },
+
+  async _uploadPasteBlob(blob, sessionId) {
     if (!this.cryptoState || !this.cryptoState.apiKey) {
       throw new Error('Encryption not ready');
     }
@@ -163,13 +183,14 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     const res = await this.encryptedFetch('/api/paste-image', {
       image: base64,
+      name: blob.name || '',
       sessionId: sessionId || this.activeId || '',
     });
 
     if (!res.ok || !res.data || !res.data.path) {
       const err = (res.data && res.data.error) || res.error || 'upload failed';
       if (window.TuiDialog && window.TuiDialog.toast) {
-        window.TuiDialog.toast(`Image paste failed: ${err}`, 'error');
+        window.TuiDialog.toast(`Upload of ${blob.name || 'file'} failed: ${err}`, 'error');
       }
       return null;
     }

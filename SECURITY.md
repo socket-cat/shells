@@ -54,6 +54,11 @@ and already has a shell as the server user. Consequently:
 - **Folder browsing** — `/api/ls` lists any directory the server user can
   read. It is not sandboxed, because the folder picker has to see everything
   the shell can reach anyway.
+- **File paste / drop** — uploaded files (any type, max 10 MB) are written to
+  `/tmp/s-<uid>` (dir 0700, refused if not owned by the server user; files
+  0600, random names), evicted oldest-first past 50 files / 50 MB, and
+  deleted when the session closes. On SSH sessions they go to `/tmp/s-<user>` on
+  the remote host.
 - **Secrets in memory** — key material is zeroed where Go allows it. Copies
   held inside the Go standard library (e.g. TLS/AES state) cannot be zeroed.
   This is a platform limitation.

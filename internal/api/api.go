@@ -560,7 +560,7 @@ func getToken(r *http.Request) string {
 func decryptBody(apiKey []byte, r *http.Request) (map[string]any, error) {
 	limit := int64(65536)
 	if r.URL.Path == "/api/paste-image" {
-		limit = 15 << 20 // 15 MB for image uploads
+		limit = 20 << 20 // 10 MB file, base64 twice (payload + ciphertext) ≈ 17.8 MB
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, limit))
 	if err != nil {

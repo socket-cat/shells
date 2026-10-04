@@ -112,7 +112,6 @@ window.ShellKeyboard = {
 
     const imgInput = document.createElement('input');
     imgInput.type = 'file';
-    imgInput.accept = 'image/*';
     imgInput.style.display = 'none';
     imgInput.addEventListener('change', () => {
       if (imgInput.files && imgInput.files[0]) {
@@ -127,8 +126,8 @@ window.ShellKeyboard = {
     const imgBtn = document.createElement('button');
     imgBtn.className = 'key-btn key-modifier';
     imgBtn.type = 'button';
-    imgBtn.textContent = 'Img';
-    imgBtn.title = 'Paste image';
+    imgBtn.textContent = 'File';
+    imgBtn.title = 'Attach file';
     imgBtn.addEventListener('click', (e) => {
       e.preventDefault();
       imgInput.click();

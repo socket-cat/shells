@@ -555,8 +555,10 @@ func (m *Manager) WriteRemoteFile(ctx context.Context, b *session.Backend, remot
 		port = 22
 	}
 	dir := filepath.Dir(remotePath)
-	cmdStr := fmt.Sprintf("mkdir -m 0700 -p %s && cat > %s && chmod 0600 %s",
-		shellEscape(dir), shellEscape(remotePath), shellEscape(remotePath))
+	// The dir must be ours and not a symlink: /tmp is shared, another user could pre-create it
+	d := shellEscape(dir)
+	cmdStr := fmt.Sprintf("mkdir -m 0700 -p %s && [ -d %s ] && [ ! -L %s ] && [ -O %s ] && chmod 0700 %s && cat > %s && chmod 0600 %s",
+		d, d, d, d, d, shellEscape(remotePath), shellEscape(remotePath))
 	args := append([]string{}, sshArgs(m.cfg.SSHKeysDir, b.ConnectionID)...)
 	args = append(args,
 		"-p", strconv.Itoa(port),
