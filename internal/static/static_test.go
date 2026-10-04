@@ -6,6 +6,9 @@ package static
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"image"
 	"image/png"
 	"io"
@@ -262,4 +265,44 @@ func TestIndexHTMLGzipETag(t *testing.T) {
 	if w := get(etag, ""); w.Code != 200 {
 		t.Fatalf("after branding change: code %d, want 200", w.Code)
 	}
+}
+
+// The extension manifest must match the live-branded bytes actually served,
+// including after a branding edit.
+func TestManifestTracksLiveBranding(t *testing.T) {
+	dir := t.TempDir()
+	fsys := testFS()
+	(*fsys)["manifest.webmanifest"] = &fstest.MapFile{Data: []byte(`{"name":{{APP_NAME_JSON}},"theme_color":"{{ACCENT}}"}`)}
+	brand := branding.Load(filepath.Join(dir, "branding.json"), "Test", "#123456")
+	if err := brand.Set("Custom", "#abcdef"); err != nil { // differs from the startup config
+		t.Fatal(err)
+	}
+	h, err := New(fsys, "1.0.1-test", dir, "#123456", "Test", brand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func() {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, "extension-manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct{ Hashes map[string]string }
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{"/", "/index.html", "/manifest.webmanifest", "/app.js"} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+			sum := sha256.Sum256(rec.Body.Bytes())
+			if got := "sha256-" + base64.StdEncoding.EncodeToString(sum[:]); m.Hashes[p] != got {
+				t.Errorf("%s: manifest %s, served %s", p, m.Hashes[p], got)
+			}
+		}
+	}
+	check()
+	if err := brand.Set("Renamed", "#fab283"); err != nil {
+		t.Fatal(err)
+	}
+	check()
 }

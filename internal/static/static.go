@@ -62,6 +62,9 @@ type Handler struct {
 	// SRI hashes keyed by request path: "sha256-…".
 	hashes map[string]string
 
+	// manifestMu serialises extension-manifest rewrites on branding changes.
+	manifestMu sync.Mutex
+
 	// iconMu guards the generated-icon cache.
 	iconMu sync.Mutex
 	// iconGen is the accent the cached icons were rendered for.
@@ -97,6 +100,7 @@ func New(publicFS fs.FS, version, keyDir, accent, appName string, brand *brandin
 
 	if keyDir != "" {
 		h.writeManifest(keyDir)
+		brand.OnChange = func() { h.writeManifest(keyDir) }
 	}
 
 	return h, nil
@@ -354,15 +358,55 @@ func (h *Handler) injectAttr(prefix, srcURL, suffix string) string {
 	return prefix + ` integrity="` + hash + `" crossorigin="anonymous"` + suffix
 }
 
+// writeManifest records the SRI hash of every served asset. The live-branded
+// files are hashed as currently rendered, so the manifest matches what
+// ServeHTTP sends; branding edits rewrite it via brand.OnChange.
 func (h *Handler) writeManifest(keyDir string) {
+	h.manifestMu.Lock()
+	defer h.manifestMu.Unlock()
+	hashes := make(map[string]string, len(h.hashes))
+	for p, v := range h.hashes {
+		hashes[p] = v
+	}
+	live := []string{"/", "/index.html"}
+	for p := range brandAssets {
+		live = append(live, p)
+	}
+	for _, p := range live {
+		if body := h.renderLive(p); body != nil {
+			sum := sha256.Sum256(body)
+			hashes[p] = "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+		}
+	}
 	manifest := map[string]any{
 		"version":     h.version,
 		"generatedAt": time.Now().UTC().Format(time.RFC3339),
-		"hashes":      h.hashes,
+		"hashes":      hashes,
 	}
 	data, _ := json.MarshalIndent(manifest, "", "  ")
 	manifestPath := filepath.Join(keyDir, "extension-manifest.json")
 	_ = fsutil.AtomicWrite(manifestPath, data)
+}
+
+// renderLive returns the per-request body of a live-branded asset (index.html
+// or a brandAssets entry), or nil when reqPath is not one.
+func (h *Handler) renderLive(reqPath string) []byte {
+	if reqPath == "/" || reqPath == "/index.html" {
+		raw, err := fs.ReadFile(h.publicFS, "index.html")
+		if err != nil {
+			return nil
+		}
+		return []byte(h.injectSRI(string(h.templateLive(raw))))
+	}
+	embedName, ok := brandAssets[reqPath]
+	if !ok {
+		return nil
+	}
+	raw, err := fs.ReadFile(h.publicFS, embedName)
+	if err != nil {
+		return nil
+	}
+	return h.templateLive(raw)
 }
 
 // ServeHTTP serves a static asset.
@@ -391,13 +435,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Branding-dependent assets are generated per-request from the current
 	// server-side branding so the installed PWA's name/icon track edits.
-	if embedName, isBrand := brandAssets[reqPath]; isBrand {
-		raw, err := fs.ReadFile(h.publicFS, embedName)
-		if err != nil {
+	if _, isBrand := brandAssets[reqPath]; isBrand {
+		body := h.renderLive(reqPath)
+		if body == nil {
 			http.NotFound(w, r)
 			return
 		}
-		body := h.templateLive(raw)
 		ext := strings.ToLower(filepath.Ext(reqPath))
 		ct := contentTypes[ext]
 		if ct == "" {
@@ -416,13 +459,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// inline --accent, data-* attributes) and carries the live SRI attributes,
 	// so branding edits are reflected without a server restart.
 	if reqPath == "/index.html" {
-		raw, err := fs.ReadFile(h.publicFS, "index.html")
-		if err != nil {
+		body := h.renderLive(reqPath)
+		if body == nil {
 			http.NotFound(w, r)
 			return
 		}
-		body := h.templateLive(raw)
-		body = []byte(h.injectSRI(string(body)))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// Rendered live for branding, so revalidate on every load — but the
 		// weak ETag over the rendered bytes makes an unchanged page a 304

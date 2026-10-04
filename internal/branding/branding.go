@@ -28,6 +28,8 @@ type Store struct {
 	mu   sync.RWMutex
 	st   State
 	path string // empty => in-memory only (no persistence)
+	// OnChange, if set before serving, runs after every Set.
+	OnChange func()
 }
 
 // ValidAccent reports whether s is a usable accent color (#rrggbb).
@@ -80,7 +82,11 @@ func (s *Store) Set(appName, accent string) error {
 	s.st.AppName = name
 	s.st.Accent = accent
 	s.mu.Unlock()
-	return s.persist()
+	err := s.persist()
+	if s.OnChange != nil {
+		s.OnChange()
+	}
+	return err
 }
 
 func (s *Store) persist() error {
