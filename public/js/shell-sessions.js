@@ -558,6 +558,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
                 document.cookie = `shells-token=${inner.sessionToken}; path=/; samesite=strict` + secure;
 
                 this.sessionToken = inner.sessionToken;
+                this._authSessions = inner.sessions || null; // consumed by sync(): no list round trip
                 this._wsReady = true;
                 // A lock was armed by a previous lock (any path). Now that the
                 // user is authenticated again, disarm it so a later bfcache
@@ -755,9 +756,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
    */
   async sync() {
     try {
-      // Parallel: the SSH list only feeds badges at mount, one RTT saved.
+      // The session list rides on auth-success (fetched only as a fallback);
+      // the SSH list, which only feeds badges, loads in parallel.
+      const pre = this._authSessions;
+      this._authSessions = null;
       const [{ ok, data: list }] = await Promise.all([
-        this.encryptedFetch('/api/sessions', { _method: 'GET' }),
+        pre ? { ok: true, data: pre } : this.encryptedFetch('/api/sessions', { _method: 'GET' }),
         this.fetchSshConnections(),
       ]);
       if (!ok) return;

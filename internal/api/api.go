@@ -320,18 +320,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request, body map[string]any, method string) {
 	// GET (list)
 	if method == "GET" || (method == "" && body["cols"] == nil) {
-		list := make([]map[string]any, 0)
-		for _, s := range h.manager.All() {
-			list = append(list, map[string]any{
-				"id":        s.ID,
-				"pid":       s.Pid,
-				"title":     s.GetTitle(),
-				"cwd":       s.Cwd,
-				"isRemote":  s.IsRemote,
-				"createdAt": s.CreatedAt,
-			})
-		}
-		util.SendJSON(w, 200, list, map[string]string{"Cache-Control": "no-store"})
+		util.SendJSON(w, 200, h.manager.List(), map[string]string{"Cache-Control": "no-store"})
 		return
 	}
 

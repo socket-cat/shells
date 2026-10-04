@@ -176,6 +176,24 @@ func (m *Manager) All() []*Session {
 	return out
 }
 
+// List returns the client-facing summary of every live session — the
+// /api/sessions GET body, also embedded in the WS auth-success message.
+func (m *Manager) List() []map[string]any {
+	all := m.All()
+	list := make([]map[string]any, len(all))
+	for i, s := range all {
+		list[i] = map[string]any{
+			"id":        s.ID,
+			"pid":       s.Pid,
+			"title":     s.GetTitle(),
+			"cwd":       s.Cwd,
+			"isRemote":  s.IsRemote,
+			"createdAt": s.CreatedAt,
+		}
+	}
+	return list
+}
+
 // Count returns the number of live sessions.
 func (m *Manager) Count() int {
 	m.mu.Lock()

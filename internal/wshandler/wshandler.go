@@ -421,6 +421,7 @@ func (cc *ClientConn) handlePlaintextControl(msg map[string]any) {
 		inner, _ := json.Marshal(map[string]any{
 			"type":         "auth-success",
 			"sessionToken": token,
+			"sessions":     cc.handler.manager.List(), // saves the client's GET /api/sessions round trip
 		})
 		cc.sendEncrypted(inner, nil)
 
