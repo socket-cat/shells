@@ -1332,7 +1332,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       // (Alt+N/Q only as plain letters — see altLetter in app.js)
       if ((e.altKey && !e.ctrlKey && ((e.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(e.code)) || ['n', 'q'].includes(e.key.toLowerCase())))
         || (e.ctrlKey && !e.altKey && (e.code === 'Tab' || (e.shiftKey && e.code === 'KeyF' && searchAddon)))
-        || this.fontZoomDelta(e) !== null) {
+        || this.fontZoomDelta(e) !== null
+        || (e.key === 'F11' && navigator.keyboard?.lock)) {
         return false;
       }
       // Ctrl+Shift+C: copy selection (Chrome/Edge otherwise open DevTools inspector)

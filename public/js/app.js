@@ -28,6 +28,18 @@ const altLetter = (e, letter) => e.altKey && !e.ctrlKey && e.key.toLowerCase() =
 window.addEventListener('beforeunload', (e) => {
   if (!window._unloadOk && window.ShellSessions?.sessions.size) { e.preventDefault(); e.returnValue = ''; }
 });
+// Keyboard lock (Chromium): in page fullscreen Ctrl+W/T/N and Esc reach the
+// shell instead of the browser; hold Esc to leave. Browser F11 fullscreen
+// doesn't count, so F11 is taken over to enter page fullscreen.
+if (navigator.keyboard?.lock) {
+  navigator.keyboard.lock().catch(() => {});
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'F11' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen().then(() => navigator.keyboard.lock()).catch(() => {});
+  });
+}
 window.addEventListener('keydown', (e) => {
   // Ctrl/Cmd +/-/0 zoom the terminal font, not the whole page.
   const zoom = window.ShellSessions.fontZoomDelta(e);
