@@ -13,7 +13,6 @@ The only local modification to any build is the removal of the trailing
 | `xterm.js` | `@xterm/xterm` | 6.0.0 | https://www.npmjs.com/package/@xterm/xterm |
 | `xterm-addon-fit.js` | `@xterm/addon-fit` | 0.11.0 | https://www.npmjs.com/package/@xterm/addon-fit |
 | `xterm-addon-webgl.js` | `@xterm/addon-webgl` | 0.19.0 | https://www.npmjs.com/package/@xterm/addon-webgl |
-| `xterm-addon-canvas.js` | `@xterm/addon-canvas` | 0.7.0 | https://www.npmjs.com/package/@xterm/addon-canvas |
 | `xterm-addon-search.js` | `@xterm/addon-search` | 0.16.0 | https://www.npmjs.com/package/@xterm/addon-search |
 | `xterm-addon-unicode11.js` | `@xterm/addon-unicode11` | 0.9.0 | https://www.npmjs.com/package/@xterm/addon-unicode11 |
 | `xterm-addon-clipboard.js` | `@xterm/addon-clipboard` | 0.2.0 | https://www.npmjs.com/package/@xterm/addon-clipboard |

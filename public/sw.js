@@ -63,7 +63,6 @@ const STATIC_ASSETS = [
   '/vendor/xterm.js',
   '/vendor/xterm-addon-fit.js',
   '/vendor/xterm-addon-webgl.js',
-  '/vendor/xterm-addon-canvas.js',
   '/vendor/xterm-addon-unicode11.js',
   '/vendor/xterm-addon-clipboard.js',
   '/vendor/xterm-addon-web-links.js',

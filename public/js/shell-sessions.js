@@ -1815,69 +1815,45 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     });
   },
 
-  // WebGL renderer — the top tier. Falls back to canvas2d on failure or
-  // context loss. Single implementation shared by mount and setWebglEnabled.
+  // WebGL renderer; xterm's built-in DOM renderer is the fallback (no addon:
+  // the canvas addon is incompatible with xterm 6). Single implementation
+  // shared by mount and setWebglEnabled.
   _loadWebgl(term, fitAddon) {
     const Addon = window.WebglAddon && window.WebglAddon.WebglAddon;
-    if (term._webglAddon) return;
-    if (!Addon) { this._loadCanvas(term); return; }
+    if (term._webglAddon || !Addon) return;
     try {
       const w = new Addon();
       w.onContextLoss(() => {
         try { w.dispose(); } catch (_) {}
         term._webglAddon = null;
-        this._loadCanvas(term);
       });
       term.loadAddon(w);
       term._webglAddon = w;
       if (fitAddon) { try { fitAddon.fit(); } catch (_) {} }
       try { term.refresh(0, term.rows - 1); } catch (_) {}
     } catch (e) {
-      console.log('[xterm] WebGL2 not available, using canvas renderer:', e && e.message);
+      console.log('[xterm] WebGL2 not available, using DOM renderer:', e && e.message);
       term._webglAddon = null;
-      this._loadCanvas(term);
     }
   },
 
-  // Canvas2D renderer — the middle tier between WebGL and the slow DOM
-  // renderer. Loaded whenever WebGL is unavailable or gets suspended.
-  _loadCanvas(term) {
-    if (term._canvasAddon || !window.CanvasAddon || !window.CanvasAddon.CanvasAddon) return;
-    try {
-      const c = new CanvasAddon.CanvasAddon();
-      term.loadAddon(c);
-      term._canvasAddon = c;
-    } catch (_) { term._canvasAddon = null; }
-  },
-
-  _dropCanvas(term) {
-    if (!term._canvasAddon) return;
-    try { term._canvasAddon.dispose(); } catch (_) {}
-    term._canvasAddon = null;
-  },
-
   // Suspends or restores the WebGL renderer on every terminal. Disposing the
-  // WebGL addon drops the terminal to the canvas2d renderer (the
-  // buffer/scrollback are untouched, just one frame re-render). Used around
-  // PWA install, where Chrome's GPU sync with active WebGL contexts can hang
-  // the renderer for the whole origin (RESULT_CODE_HUNG).
+  // WebGL addon drops the terminal to the DOM renderer (the buffer/scrollback
+  // are untouched, just one frame re-render). Used around PWA install, where
+  // Chrome's GPU sync with active WebGL contexts can hang the renderer for the
+  // whole origin (RESULT_CODE_HUNG).
   setWebglEnabled(enabled) {
     this.sessions.forEach((s) => {
       const term = s.term;
       if (!term) return;
       if (enabled) {
-        if (term._webglAddon) return;
-        this._dropCanvas(term);
         this._loadWebgl(term, s.fitAddon);
       } else if (term._webglAddon) {
         try { term._webglAddon.dispose(); } catch (_) {}
         term._webglAddon = null;
-        this._loadCanvas(term);
       }
     });
   },
-
-
 
   next() {
     const ids = Array.from(this.sessions.keys());
