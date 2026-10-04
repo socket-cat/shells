@@ -128,14 +128,14 @@ async function resolveSecretHash(saltHex) {
 // A lock requested in any tab forces every other tab of this app to reload to
 // the secret prompt (localStorage is shared per origin).
 window.addEventListener('storage', (e) => {
-  if (e.key === 'shells-lock-req') location.reload();
+  if (e.key === 'shells-lock-req') { window._unloadOk = true; location.reload(); }
 });
 
 // A frozen tab restored from the back/forward cache must not bypass a lock:
 // frozen pages do not receive storage events, so re-authenticate whenever a
 // lock was requested at any point after the page was loaded.
 window.addEventListener('pageshow', (e) => {
-  if (e.persisted && localStorage.getItem('shells-lock-req')) location.reload();
+  if (e.persisted && localStorage.getItem('shells-lock-req')) { window._unloadOk = true; location.reload(); }
 });
 
 // ── Autolock on idle (local only, 0 = off) ──
@@ -327,6 +327,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const secure = location.protocol === 'https:' ? '; secure' : '';
     document.cookie = 'shells-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT' + secure;
     localStorage.setItem('shells-lock-req', String(Date.now())); // signal other tabs to lock
+    window._unloadOk = true;
     location.reload();
   },
 
@@ -1294,6 +1295,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       scrollOnUserInput: !this.isMobile(),
       smoothScrollDuration: 0,
       fastScrollModifier: 'alt',
+      macOptionClickForcesSelection: true,
       fastScrollSensitivity: 5,
       scrollSensitivity: 1,
     });
@@ -1329,7 +1331,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       // e.g. Alt+N would send ESC n (readline history search) and swallow the next typed line
       // (Alt+N/Q only as plain letters — see altLetter in app.js)
       if ((e.altKey && !e.ctrlKey && ((e.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(e.code)) || ['n', 'q'].includes(e.key.toLowerCase())))
-        || (e.ctrlKey && !e.altKey && (e.code === 'Tab' || (e.shiftKey && e.code === 'KeyF' && searchAddon)))) {
+        || (e.ctrlKey && !e.altKey && (e.code === 'Tab' || (e.shiftKey && e.code === 'KeyF' && searchAddon)))
+        || this.fontZoomDelta(e) !== null) {
         return false;
       }
       // Ctrl+Shift+C: copy selection (Chrome/Edge otherwise open DevTools inspector)
@@ -1798,6 +1801,16 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       this._fontSize = v;
     }
     return this._fontSize;
+  },
+
+  // Font-size delta for a Ctrl/Cmd +/-/0 key, or null when it isn't one
+  // (Ctrl+Shift+- stays Ctrl+_ for the shell).
+  fontZoomDelta(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
+    if (e.code === 'Equal' || e.code === 'NumpadAdd') return 1;
+    if ((e.code === 'Minus' && !e.shiftKey) || e.code === 'NumpadSubtract') return -1;
+    if (e.code === 'Digit0' || e.code === 'Numpad0') return 14 - this._getFontSize();
+    return null;
   },
 
   setFontSize(delta) {

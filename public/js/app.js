@@ -24,7 +24,17 @@ window.__APP_VERSION__ = document.body.dataset.version || '';
 // characters composed with Alt still reach the shell: macOS Option+N is the
 // ñ dead key, Option+Q types œ, Windows AltGr (Ctrl+Alt) +Q types @.
 const altLetter = (e, letter) => e.altKey && !e.ctrlKey && e.key.toLowerCase() === letter;
+// Ctrl+W is readline delete-word, but a browser tab closes on it: ask first. Programmatic reloads set _unloadOk.
+window.addEventListener('beforeunload', (e) => {
+  if (!window._unloadOk && window.ShellSessions?.sessions.size) e.preventDefault();
+});
 window.addEventListener('keydown', (e) => {
+  // Ctrl/Cmd +/-/0 zoom the terminal font, not the whole page.
+  const zoom = window.ShellSessions.fontZoomDelta(e);
+  if (zoom !== null) {
+    e.preventDefault();
+    window.ShellSessions.setFontSize(zoom);
+  }
   if (altLetter(e, 'q')) {
     e.preventDefault();
     const ss = window.ShellSessions;
