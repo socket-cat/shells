@@ -1269,6 +1269,10 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     tile.appendChild(body);
 
     tile.addEventListener('mousedown', (e) => {
+      // Desktop: pressing the header (buttons, title, blank space) must not
+      // move focus off the terminal setActive just focused; clicks still
+      // fire. Mobile untouched.
+      if (!this.isMobile() && e.target.closest('.tile-header')) e.preventDefault();
       if (e.target.closest('.fs-tab-bar')) return;
       this.setActive(id);
       if (e.target && e.target.closest('#cmd-bar, #cmd-input, textarea, input, button, [contenteditable="true"]')) return;
@@ -1685,7 +1689,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       session.tile.style.height = '';
       this._removeFsTabs(session.tile);
     } else {
-      if (id !== this.activeId) this.setActive(id); // the fullscreen shell is the one you type into
       this._renderFsTabs(session.tile);
     }
     this.updateSleepState();

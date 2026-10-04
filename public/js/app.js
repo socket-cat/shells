@@ -103,7 +103,7 @@ document.getElementById('shell-grid').addEventListener('click', (e) => {
   const layoutBtn = e.target.closest('[data-action="cycle-layout"]');
   if (layoutBtn) { window.ShellSessions.cycleLayout(); return; }
   const promoteBtn = e.target.closest('[data-action="promote-master"]');
-  if (promoteBtn) { window.ShellSessions.promoteToMaster(promoteBtn.dataset.shellId); window.ShellSessions.refocus(); return; }
+  if (promoteBtn) { window.ShellSessions.promoteToMaster(promoteBtn.dataset.shellId); return; }
   const kbBtn = e.target.closest('[data-action="open-keyboard"]');
   if (kbBtn) { window.ShellKeyboard.open(); return; }
   const searchBtn = e.target.closest('[data-action="open-search"]');
@@ -114,11 +114,11 @@ document.getElementById('shell-grid').addEventListener('click', (e) => {
     return;
   }
   const fontMinusBtn = e.target.closest('[data-action="font-minus"]');
-  if (fontMinusBtn) { window.ShellSessions.setFontSize(-1); window.ShellSessions.refocus(); return; }
+  if (fontMinusBtn) { window.ShellSessions.setFontSize(-1); return; }
   const fontPlusBtn = e.target.closest('[data-action="font-plus"]');
-  if (fontPlusBtn) { window.ShellSessions.setFontSize(1); window.ShellSessions.refocus(); return; }
+  if (fontPlusBtn) { window.ShellSessions.setFontSize(1); return; }
   const btn = e.target.closest('[data-action="toggle-fullscreen"]');
-  if (btn) { window.ShellSessions.toggleFullscreen(btn.dataset.shellId); window.ShellSessions.refocus(); return; }
+  if (btn) { window.ShellSessions.toggleFullscreen(btn.dataset.shellId); return; }
   const lockBtn = e.target.closest('[data-action="lock"]');
   if (lockBtn) {
     const tile = lockBtn.closest('.shell-tile');
