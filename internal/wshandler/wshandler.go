@@ -34,7 +34,7 @@ const (
 	msgTypeData        byte = 0
 	msgTypeControl     byte = 1
 	coalesceMs              = 8 * time.Millisecond
-	coalesceFlushBytes      = 32768
+	coalesceFlushBytes      = 131072 // floods: let the 8ms window, not size, cut frames (fewer decrypt/parse calls; ~17% faster seq 1M than 32K)
 	lockAllMinInterval      = 5 * time.Second
 
 	// wsConnectsPerIP caps new WebSocket connects per minute per client IP.
