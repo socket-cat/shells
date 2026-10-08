@@ -1387,6 +1387,14 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           // xterm treats Android as Linux: every selection runs textarea.select() (primary-selection hook), which focuses natively and toggles the keyboard
           textarea.select = () => {};
           _realFocus = () => { textarea.blur(); HTMLElement.prototype.focus.call(textarea); };
+          // After a paste the IME reopens the last word as a composition (autocorrect); xterm's overlay
+          // would draw it again at the cursor although it's already sent — hide the overlay for that one
+          let compStart = '';
+          textarea.addEventListener('compositionstart', () => { compStart = textarea.value; }, true);
+          textarea.addEventListener('compositionupdate', (e) => {
+            if (e.data && compStart.endsWith(e.data)) term.element.querySelector('.composition-view')?.style.setProperty('visibility', 'hidden');
+          }, true);
+          textarea.addEventListener('compositionend', () => term.element.querySelector('.composition-view')?.style.removeProperty('visibility'), true);
           // URL-mode keyboards send / . - as keydown(229) + plain insertText, no keyup between; xterm only clears
           // its keydown-seen flag on keyup, so it drops the input as already handled — deliver it ourselves.
           // Not preventDefault: the IME's autocorrect reads the textarea, it must keep the char (else words merge)
