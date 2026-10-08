@@ -1387,6 +1387,18 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           // xterm treats Android as Linux: every selection runs textarea.select() (primary-selection hook), which focuses natively and toggles the keyboard
           textarea.select = () => {};
           _realFocus = () => { textarea.blur(); HTMLElement.prototype.focus.call(textarea); };
+          // URL-mode keyboards send / . - as keydown(229) + plain insertText, no keyup between; xterm only clears
+          // its keydown-seen flag on keyup, so it drops the input as already handled — deliver it ourselves.
+          // Not preventDefault: the IME's autocorrect reads the textarea, it must keep the char (else words merge)
+          let imeKey = false;
+          textarea.addEventListener('keydown', (e) => { imeKey = e.keyCode === 229; }, true);
+          textarea.addEventListener('keyup', () => { imeKey = false; }, true);
+          textarea.addEventListener('input', (e) => {
+            // right after a compositionend xterm's deferred send picks the char up from the textarea itself
+            // (ponytail: private xterm field, pinned vendor build — recheck on xterm upgrade)
+            if (term._core?._compositionHelper?._isSendingComposition) return;
+            if (imeKey && !e.isComposing && e.inputType === 'insertText' && e.data) term.input(e.data);
+          }, true);
         }
       }
 
