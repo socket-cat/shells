@@ -232,8 +232,7 @@ func (m *Manager) SetupKey(connID, host, user string, port int, password string)
 	}
 	pubKeyLine := strings.TrimSpace(string(pubKey))
 
-	escapedKey := strings.ReplaceAll(pubKeyLine, "'", "'\\''")
-	remoteCmd := fmt.Sprintf("umask 077 && mkdir -p ~/.ssh && echo '%s' >> ~/.ssh/authorized_keys", escapedKey)
+	remoteCmd := installKeyScript(pubKeyLine)
 
 	args := []string{
 		"-o", "StrictHostKeyChecking=" + sshStrictness(),
@@ -279,12 +278,22 @@ func (m *Manager) SetupKey(connID, host, user string, port int, password string)
 	})
 
 	cancelExit := term.OnExit(func(exitCode int, signal string) {
+		mu.Lock()
+		last := strings.TrimSpace(string(output))
+		mu.Unlock()
+		if i := strings.LastIndexAny(last, "\r\n"); i >= 0 {
+			last = last[i+1:]
+		}
 		if exitCode == 0 {
 			resultCh <- nil
-		} else if passwordTried {
+		} else if passwordTried && exitCode == 255 { // 255 = ssh itself failed (auth); anything else is the remote command
 			resultCh <- &SetupError{Code: "max_attempts", Msg: "The password was incorrect"}
 		} else {
-			resultCh <- &SetupError{Code: "install_failed", Msg: fmt.Sprintf("Key installation failed (exit %d)", exitCode)}
+			msg := fmt.Sprintf("Key installation failed (exit %d)", exitCode)
+			if last != "" {
+				msg += ": " + last
+			}
+			resultCh <- &SetupError{Code: "install_failed", Msg: msg}
 		}
 	})
 
@@ -468,7 +477,30 @@ func (m *Manager) Validate() func(backend *session.Backend, command, cwd string)
 	}
 }
 
-// RemoveRemoteKey removes our public key from the remote authorized_keys.
+// installKeyScript appends pubKeyLine to ~/.ssh/authorized_keys, falling back to
+// authorized_keys2 when the first can't be written (e.g. Proxmox links it into
+// /etc/pve, which is read-only without quorum). sshd reads both by default.
+func installKeyScript(pubKeyLine string) string {
+	k := strings.ReplaceAll(pubKeyLine, "'", "'\\''")
+	return fmt.Sprintf("umask 077 && mkdir -p ~/.ssh && { { echo '%[1]s' >> ~/.ssh/authorized_keys; } 2>/dev/null || echo '%[1]s' >> ~/.ssh/authorized_keys2; }", k)
+}
+
+// removeKeyScript drops pubKeyLine from authorized_keys and authorized_keys2,
+// then prints how many copies remain in either.
+func removeKeyScript(pubKeyLine string) string {
+	k := strings.ReplaceAll(pubKeyLine, "'", "'\\''")
+	return "set -e\n" +
+		"for ak in \"$HOME/.ssh/authorized_keys\" \"$HOME/.ssh/authorized_keys2\"; do\n" +
+		fmt.Sprintf("[ -f \"$ak\" ] && grep -qFx -- '%s' \"$ak\" || continue\n", k) +
+		"if [ -L \"$ak\" ]; then echo \"ERR:SYMLINK\"; exit 1; fi\n" +
+		"tmp=$(mktemp \"$ak.XXXXXX\") || { echo \"ERR:TMP\"; exit 1; }\n" +
+		fmt.Sprintf("grep -vFx -- '%s' \"$ak\" > \"$tmp\" || { rc=$?; if [ \"$rc\" -ne 1 ]; then rm -f \"$tmp\"; echo \"ERR:GREP\"; exit 1; fi; }\n", k) +
+		"mv -f \"$tmp\" \"$ak\"\n" +
+		"done\n" +
+		fmt.Sprintf("cat \"$HOME/.ssh/authorized_keys\" \"$HOME/.ssh/authorized_keys2\" 2>/dev/null | grep -cFx -- '%s' || echo 0\n", k)
+}
+
+// RemoveRemoteKey removes our public key from the remote authorized_keys(2).
 func (m *Manager) RemoveRemoteKey(connID, host, user string, port int) (bool, string) {
 	if err := ValidateConnectionID(connID); err != nil {
 		return false, "invalid_id"
@@ -488,16 +520,7 @@ func (m *Manager) RemoveRemoteKey(connID, host, user string, port int) (bool, st
 		return false, "invalid_pub"
 	}
 
-	escapedLine := strings.ReplaceAll(pubKeyLine, "'", "'\\''")
-	script := "set -e\n" +
-		"ak=\"$HOME/.ssh/authorized_keys\"\n" +
-		"if [ -L \"$ak\" ]; then echo \"ERR:SYMLINK\"; exit 1; fi\n" +
-		"if [ ! -f \"$ak\" ]; then echo \"ERR:NOFILE\"; exit 1; fi\n" +
-		"tmp=$(mktemp \"$ak.XXXXXX\") || { echo \"ERR:TMP\"; exit 1; }\n" +
-		fmt.Sprintf("grep -vFx -- '%s' \"$ak\" > \"$tmp\" || { rc=$?; if [ \"$rc\" -ne 1 ]; then rm -f \"$tmp\"; echo \"ERR:GREP\"; exit 1; fi; }\n", escapedLine) +
-		"mv -f \"$tmp\" \"$ak\"\n" +
-		fmt.Sprintf("grep -cFx -- '%s' \"$ak\" || echo 0\n", escapedLine)
-	script = remoteCommand(script)
+	script := remoteCommand(removeKeyScript(pubKeyLine))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

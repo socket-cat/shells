@@ -5,6 +5,8 @@ package ssh
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -111,6 +113,42 @@ func TestValidateRemoteNothingToValidate(t *testing.T) {
 		}
 		if err != nil {
 			t.Fatalf("command %q: expected nil err, got %v", command, err)
+		}
+	}
+}
+
+// TestKeyScripts runs the install/remove scripts with a temp HOME: a normal
+// authorized_keys, and a dangling one (Proxmox /etc/pve link without pmxcfs)
+// that must fall back to authorized_keys2.
+func TestKeyScripts(t *testing.T) {
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest shells-it's"
+	run := func(home, script string) string {
+		cmd := exec.Command("sh", "-c", remoteCommand(script))
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	for _, dangling := range []bool{false, true} {
+		home := t.TempDir()
+		ssh := filepath.Join(home, ".ssh")
+		want := filepath.Join(ssh, "authorized_keys")
+		if dangling {
+			_ = os.Mkdir(ssh, 0o700)
+			_ = os.Symlink("/nonexistent/priv/authorized_keys", want)
+			want += "2"
+		}
+		run(home, installKeyScript(key))
+		if b, _ := os.ReadFile(want); string(b) != key+"\n" {
+			t.Fatalf("dangling=%v: %s = %q", dangling, want, b)
+		}
+		if got := run(home, removeKeyScript(key)); !strings.HasSuffix(got, "0") {
+			t.Fatalf("dangling=%v: remaining %q", dangling, got)
+		}
+		if b, _ := os.ReadFile(want); len(b) != 0 {
+			t.Fatalf("dangling=%v: key not removed: %q", dangling, b)
 		}
 	}
 }
