@@ -38,9 +38,14 @@ with TLS (the PWA needs HTTPS).
 - **Persistent sessions** — shells keep running when you close the tab or lock
   your phone; reattach from any device. Built for long-running jobs and AI CLI
   agents on the go.
+- **Files straight to the shell** — paste (Ctrl+V), drop or attach any file up
+  to 10 MB, even over SSH; it lands on the host and its path appears on the
+  prompt, ready for your AI CLI agent.
 - **One binary** — ~8 MB, fully static, cross-compiled. Drop it on any box.
 - **Zero deps** — pure Go standard library, no `node_modules`, no native addons.
 - **E2E encrypted** — P-256 ECDH → AES-256-GCM; keys never leave your device.
+- **Signed self-update** — releases verified against an Ed25519 signature
+  served from socket.cat, not GitHub; a tampered release never installs.
 - **Mobile-first** — installable PWA, touch gestures, on-screen keyboard picker.
 - **Rootless** — runs as your user, no sudo.
 
