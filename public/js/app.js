@@ -24,10 +24,6 @@ window.__APP_VERSION__ = document.body.dataset.version || '';
 // characters composed with Alt still reach the shell: macOS Option+N is the
 // ñ dead key, Option+Q types œ, Windows AltGr (Ctrl+Alt) +Q types @.
 const altLetter = (e, letter) => e.altKey && !e.ctrlKey && e.key.toLowerCase() === letter;
-// Ctrl+W is readline delete-word, but a browser tab closes on it: ask first. Programmatic reloads set _unloadOk.
-window.addEventListener('beforeunload', (e) => {
-  if (!window._unloadOk && window.ShellSessions?.sessions.size) { e.preventDefault(); e.returnValue = ''; }
-});
 // Keyboard lock (Chromium): in page fullscreen Ctrl+W/T/N and Esc reach the
 // shell instead of the browser; hold Esc to leave. Browser F11 fullscreen
 // doesn't count, so F11 is taken over to enter page fullscreen.

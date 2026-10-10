@@ -128,14 +128,14 @@ async function resolveSecretHash(saltHex) {
 // A lock requested in any tab forces every other tab of this app to reload to
 // the secret prompt (localStorage is shared per origin).
 window.addEventListener('storage', (e) => {
-  if (e.key === 'shells-lock-req') { window._unloadOk = true; location.reload(); }
+  if (e.key === 'shells-lock-req') location.reload();
 });
 
 // A frozen tab restored from the back/forward cache must not bypass a lock:
 // frozen pages do not receive storage events, so re-authenticate whenever a
 // lock was requested at any point after the page was loaded.
 window.addEventListener('pageshow', (e) => {
-  if (e.persisted && localStorage.getItem('shells-lock-req')) { window._unloadOk = true; location.reload(); }
+  if (e.persisted && localStorage.getItem('shells-lock-req')) location.reload();
 });
 
 // ── Autolock on idle (local only, 0 = off) ──
@@ -327,7 +327,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const secure = location.protocol === 'https:' ? '; secure' : '';
     document.cookie = 'shells-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT' + secure;
     localStorage.setItem('shells-lock-req', String(Date.now())); // signal other tabs to lock
-    window._unloadOk = true;
     location.reload();
   },
 

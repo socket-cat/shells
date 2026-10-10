@@ -101,7 +101,6 @@
           var keys = await caches.keys();
           await Promise.all(keys.map(function (k) { return caches.delete(k); }));
         } catch (_) {}
-        window._unloadOk = true;
         window.location.reload();
         setTimeout(function () {
           window.location.href = window.location.pathname + '?_=' + Date.now();

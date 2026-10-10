@@ -59,7 +59,6 @@ const revealForceReload = () =>
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!updateRequested || reloading) return;
     reloading = true;
-    window._unloadOk = true;
     window.location.reload();
   });
 
