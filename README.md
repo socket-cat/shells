@@ -40,7 +40,8 @@ with TLS (the PWA needs HTTPS).
   agents on the go.
 - **Files straight to the shell** — paste (Ctrl+V), drop or attach any file up
   to 10 MB, even over SSH; it lands on the host and its path appears on the
-  prompt, ready for your AI CLI agent.
+  prompt, ready for your AI CLI agent. On mobile, the attach button takes a
+  photo or picks files.
 - **One binary** — ~8 MB, fully static, cross-compiled. Drop it on any box.
 - **Zero deps** — pure Go standard library, no `node_modules`, no native addons.
 - **E2E encrypted** — P-256 ECDH → AES-256-GCM; keys never leave your device.

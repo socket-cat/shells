@@ -110,33 +110,9 @@ window.ShellKeyboard = {
     escBtn.type = 'button';
     escBtn.textContent = 'Esc';
 
-    const imgInput = document.createElement('input');
-    imgInput.type = 'file';
-    imgInput.style.display = 'none';
-    imgInput.addEventListener('change', () => {
-      if (imgInput.files && imgInput.files[0]) {
-        if (window.ShellSessions && typeof window.ShellSessions.pasteImageFile === 'function') {
-          window.ShellSessions.pasteImageFile(imgInput.files[0]);
-        }
-        close();
-      }
-    });
-    body.appendChild(imgInput);
-
-    const imgBtn = document.createElement('button');
-    imgBtn.className = 'key-btn key-modifier';
-    imgBtn.type = 'button';
-    imgBtn.textContent = 'File';
-    imgBtn.title = 'Attach file';
-    imgBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      imgInput.click();
-    });
-
     modRow.appendChild(shiftBtn);
     modRow.appendChild(ctrlBtn);
     modRow.appendChild(escBtn);
-    modRow.appendChild(imgBtn);
 
     const updateModUI = () => {
       shiftBtn.classList.toggle('key-modifier-active', this._shift);

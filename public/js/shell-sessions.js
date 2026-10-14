@@ -846,6 +846,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   },
 
   async encryptedFetch(url, params = {}) {
+    // The WS can drop while the page is backgrounded (camera app, file
+    // picker); its reconnect rebuilds the keys, so wait for it.
+    if (!this.cryptoState || !this.cryptoState.apiKey) await this.getWs();
     if (!this.cryptoState || !this.cryptoState.apiKey) {
       throw new Error('Encryption not ready');
     }
@@ -1231,6 +1234,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       { title: 'Promote to Master', act: 'promote-master', icon: window.Icons.promote, sid: true, desktopOnly: true },
       { title: 'New shell', act: 'new-shell', icon: window.Icons.plus },
       { title: 'Cycle Layout', act: 'cycle-layout', icon: window.Icons.layout, desktopOnly: true },
+      { title: 'Attach files', act: 'attach-files', icon: window.Icons.paperclip, sid: true, mobileOnly: true },
       { title: 'Keyboard', act: 'open-keyboard', icon: window.Icons.keyboard, sid: true, mobileOnly: true },
       { title: 'Choose Theme', act: 'toggle-theme', icon: window.Icons.themeCircle, overflow: true },
       { title: 'Smaller font', act: 'font-minus', icon: '<span class="fs-a">A</span>', overflow: true },

@@ -62,29 +62,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     // File managers (Finder/Explorer copy) put the file name in text/plain: not a caption
     if (imageBlobs.some((b) => b.name === caption)) caption = '';
 
-    const uploadResults = await Promise.all(
-      imageBlobs.map(async (blob) => {
-        try {
-          return await this._uploadPasteImage(blob, sessionId);
-        } catch (err) {
-          console.error('[paste-image] upload failed:', err);
-          return null;
-        }
-      })
-    );
-    const uploadedPaths = uploadResults.filter(Boolean).map((p) => `"${p}"`);
-
-    if (uploadedPaths.length === 0) return;
-
-    let pasteText = uploadedPaths.join(' ') + ' ';
-    if (caption) {
-      pasteText = caption + ' ' + pasteText;
-    }
-    term.paste(pasteText);
-    if (window.TuiDialog && window.TuiDialog.toast) {
-      const msg = uploadedPaths.length === 1 ? `Pasted file as ${uploadedPaths[0]}` : `Pasted ${uploadedPaths.length} files`;
-      window.TuiDialog.toast(msg, 'info');
-    }
+    await this._uploadFiles(imageBlobs, term, sessionId, 'Pasted', caption);
   },
 
   _handleTerminalDragOver(e) {
@@ -103,50 +81,72 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     e.preventDefault();
     e.stopPropagation();
 
-    const uploadResults = await Promise.all(
-      files.map(async (file) => {
-        try {
-          return await this._uploadPasteImage(file, sessionId);
-        } catch (err) {
-          console.error('[drop-image] upload failed:', err);
-          return null;
-        }
-      })
-    );
-    const uploadedPaths = uploadResults.filter(Boolean).map((p) => `"${p}"`);
-    if (uploadedPaths.length === 0) return;
-
-    term.paste(uploadedPaths.join(' ') + ' ');
-    if (window.TuiDialog && window.TuiDialog.toast) {
-      const msg = uploadedPaths.length === 1 ? `Dropped file as ${uploadedPaths[0]}` : `Dropped ${uploadedPaths.length} files`;
-      window.TuiDialog.toast(msg, 'info');
-    }
+    await this._uploadFiles(files, term, sessionId, 'Dropped');
   },
 
-  async pasteImageFile(file, sessionId) {
-    const sid = sessionId || this.activeId;
-    const s = sid ? this.sessions.get(sid) : null;
-    if (!file || (!s && !this.activeId)) return null;
+  // Uploads in parallel, then puts all quoted paths on the prompt at once.
+  // A sticky toast counts finished files; per-file errors show until the next
+  // success, and the final toast says if any were lost.
+  async _uploadFiles(files, term, sessionId, verb, caption = '') {
+    const toast = (message, variant, duration) => window.TuiDialog && window.TuiDialog.toast && window.TuiDialog.toast({ message, variant, duration });
+    const mb = (files.reduce((n, f) => n + f.size, 0) / 1048576).toFixed(1);
+    let done = 0;
+    const progress = () => toast(`Uploading ${files.length > 1 ? `${done}/${files.length} files` : files[0].name || 'file'} (${mb} MB)…`, 'info', 600000);
+    progress();
+    const paths = (await Promise.all(files.map(async (f) => {
+      const p = await this._uploadPasteImage(f, sessionId);
+      done++;
+      if (p && done < files.length) progress();
+      return p;
+    }))).filter(Boolean).map((p) => `"${p}"`);
+    if (paths.length === 0) return;
+    term.paste((caption ? caption + ' ' : '') + paths.join(' ') + ' ');
+    if (paths.length < files.length) toast(`${verb} ${paths.length} of ${files.length} files`, 'error');
+    else toast(paths.length === 1 ? `${verb} file as ${paths[0]}` : `${verb} ${paths.length} files`, 'info');
+  },
+
+  // Mobile all-in-one: no `capture`, so the OS chooser offers camera, photos
+  // and files. Originals go as is; only images over the 10 MB cap are
+  // re-encoded (2048 px, q0.85) so big camera shots still fit.
+  attachFiles(sessionId) {
+    if (!this._attachInput) {
+      const input = this._attachInput = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      input.style.display = 'none';
+      input.addEventListener('change', async () => {
+        const files = Array.from(input.files || []);
+        const sid = this.sessions.has(input.dataset.sid) ? input.dataset.sid : this.activeId; // shell may have closed meanwhile
+        const s = this.sessions.get(sid);
+        input.value = '';
+        if (!files.length || !s || !s.term) return;
+        await this._uploadFiles(await Promise.all(files.map((f) => this._shrinkImage(f))), s.term, sid, 'Attached');
+      });
+      document.body.appendChild(input);
+    }
+    this._attachInput.dataset.sid = sessionId || '';
+    this._attachInput.click();
+  },
+
+  async _shrinkImage(file) {
+    if (file.size <= 10 * 1048576 || !file.type.startsWith('image/')) return file;
     try {
-      const path = await this._uploadPasteImage(file, sid);
-      if (path) {
-        if (s && s.term) {
-          s.term.paste(`"${path}" `);
-        } else if (typeof this.writeActive === 'function') {
-          this.writeActive(`"${path}" `);
-        }
-        if (window.TuiDialog && window.TuiDialog.toast) {
-          window.TuiDialog.toast(`Attached file as ${path}`, 'info');
-        }
-        return path;
-      }
+      const bmp = await createImageBitmap(file); // honours EXIF orientation
+      const k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bmp.width * k);
+      canvas.height = Math.round(bmp.height * k);
+      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      bmp.close();
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
+      return blob ? new File([blob], file.name.replace(/\.[^.]*$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
     } catch (err) {
-      console.error('[pasteImageFile] failed:', err);
+      console.error('[attach] downscale failed, sending original:', err);
+      return file; // _uploadPasteImage rejects it with the size toast
     }
-    return null;
   },
 
-  // Owns all upload feedback: size reject, progress for big files, any failure.
+  // Per-file feedback: size reject and any failure (progress: _uploadFiles).
   async _uploadPasteImage(blob, sessionId) {
     const toast = (msg, kind) => window.TuiDialog && window.TuiDialog.toast && window.TuiDialog.toast(msg, kind);
     const label = blob.name || 'file';
@@ -155,7 +155,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       toast(`${label} is ${mb} MB, max 10 MB`, 'error');
       return null;
     }
-    if (blob.size > 1048576) toast(`Uploading ${label} (${mb} MB)…`, 'info');
     try {
       return await this._uploadPasteBlob(blob, sessionId);
     } catch (err) {
@@ -167,9 +166,6 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   },
 
   async _uploadPasteBlob(blob, sessionId) {
-    if (!this.cryptoState || !this.cryptoState.apiKey) {
-      throw new Error('Encryption not ready');
-    }
     const base64 = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {

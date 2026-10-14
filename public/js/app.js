@@ -100,6 +100,8 @@ document.getElementById('shell-grid').addEventListener('click', (e) => {
   if (layoutBtn) { window.ShellSessions.cycleLayout(); return; }
   const promoteBtn = e.target.closest('[data-action="promote-master"]');
   if (promoteBtn) { window.ShellSessions.promoteToMaster(promoteBtn.dataset.shellId); return; }
+  const attachBtn = e.target.closest('[data-action="attach-files"]');
+  if (attachBtn) { window.ShellSessions.attachFiles(attachBtn.dataset.shellId); return; }
   const kbBtn = e.target.closest('[data-action="open-keyboard"]');
   if (kbBtn) { window.ShellKeyboard.open(); return; }
   const searchBtn = e.target.closest('[data-action="open-search"]');
