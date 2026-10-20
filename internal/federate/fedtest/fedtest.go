@@ -9,6 +9,7 @@ package fedtest
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -43,6 +44,9 @@ type Remote struct {
 	Dir  string
 	Mgr  *session.Manager
 	cert atomic.Pointer[tls.Certificate]
+	// GUC, when set, gates every request on that GUC cookie with a 401, as
+	// the socket.cat relay does.
+	GUC atomic.Pointer[string]
 }
 
 // Start runs a remote until the test ends, CheckOrigin on.
@@ -76,7 +80,15 @@ func Start(t *testing.T) *Remote {
 	mux.HandleFunc("/api/", apiH.ServeHTTP)
 
 	rm.SwapCert(t)
-	srv := httptest.NewUnstartedServer(mux)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if g := rm.GUC.Load(); g != nil {
+			if c, err := r.Cookie("GUC"); err != nil || c.Value != *g {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	srv.TLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		return &tls.Config{Certificates: []tls.Certificate{*rm.cert.Load()}, NextProtos: []string{"http/1.1"}}, nil
 	}}
@@ -84,6 +96,19 @@ func Start(t *testing.T) *Remote {
 	t.Cleanup(func() { srv.Close(); rm.Mgr.DestroyAll() })
 	rm.URL = srv.URL
 	return rm
+}
+
+// Roots is a pool holding the certificate served now, as if a public CA
+// vouched for it.
+func (rm *Remote) Roots(t *testing.T) *x509.CertPool {
+	t.Helper()
+	leaf, err := x509.ParseCertificate(rm.cert.Load().Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return pool
 }
 
 // SwapCert serves a fresh self-signed certificate from now on.

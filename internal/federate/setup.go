@@ -6,34 +6,38 @@ package federate
 import (
 	"encoding/hex"
 	"errors"
-	"strings"
 
 	"shells/internal/crypto"
 )
 
-// errSocketCat: the socket.cat route needs the relay's GUC session first.
-// Device pairing (guc G1–G3) goes where it is returned: show a code + QR,
-// poll until the owner approves it in the dashboard, keep the relay session
-// id in remote.GUC.
-var errSocketCat = errors.New("socket.cat names need device pairing, not built yet: use the blind union.cat name")
-
-func checkURL(rawURL string) (string, error) {
+// remoteFor is the remote to dial for url. A socket.cat name sits behind the
+// relay's GUC gate: it carries the session the owner approved, or the error
+// is a PairError with the code to approve.
+func remoteFor(rawURL string) (*remote, error) {
 	origin, host, _, err := NormalizeURL(rawURL)
-	if err == nil && (host == "socket.cat" || strings.HasSuffix(host, ".socket.cat")) {
-		err = errSocketCat
+	if err != nil {
+		return nil, err
 	}
-	return origin, err
+	r := &remote{URL: origin}
+	if isSocketCat(host) {
+		r.GUC, err = relaySession(origin)
+	}
+	return r, err
 }
 
 // Probe checks that url answers as a shells remote (TLS, then a crypto-ack),
 // as ssh.Probe checks reachability before the picker asks for a password.
 func Probe(rawURL string) error {
-	origin, err := checkURL(rawURL)
+	r, err := remoteFor(rawURL)
 	if err != nil {
 		return err
 	}
 	var pin string
-	c, _, err := dial(&remote{URL: origin}, &pin)
+	c, _, err := dial(r, &pin)
+	if relayRefused(err) && r.GUC != "" {
+		forgetPairing(r.URL)
+		_, err = relaySession(r.URL)
+	}
 	if err != nil {
 		return err
 	}
@@ -46,14 +50,13 @@ func Probe(rawURL string) error {
 // secret is used once and dropped. The identity and the TLS leaf are pinned
 // on this first use (accept-new); a wrong secret writes nothing.
 func Setup(keysDir, id, rawURL string, secret []byte) error {
-	origin, err := checkURL(rawURL)
-	if err != nil {
-		return err
-	}
 	if _, err := credPath(keysDir, id); err != nil {
 		return err
 	}
-	r := &remote{URL: origin}
+	r, err := remoteFor(rawURL)
+	if err != nil {
+		return err
+	}
 	var pin string
 	c, a, err := dial(r, &pin)
 	if err != nil {
@@ -73,5 +76,12 @@ func Setup(keysDir, id, rawURL string, secret []byte) error {
 		return err
 	}
 	r.Salt, r.SecretHash, r.Fingerprint, r.TLSPin = a.Salt, hex.EncodeToString(hash), fp, pin
-	return save(keysDir, id, r)
+	if old, _ := load(keysDir, id); old != nil && old.GUC != r.GUC {
+		Unpair(keysDir, id)
+	}
+	if err := save(keysDir, id, r); err != nil {
+		return err
+	}
+	forgetPairing(r.URL)
+	return nil
 }

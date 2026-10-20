@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"shells/internal/federate"
 	"shells/internal/ssh"
 	"shells/internal/util"
 )
@@ -84,6 +85,9 @@ func (h *Handler) handleSSHConnectionDelete(w http.ResponseWriter, path string) 
 		}
 	}
 
+	if conn.Kind == "shells" {
+		federate.Unpair(h.cfg.SSHKeysDir, id)
+	}
 	h.sshMgr.Delete(id)
 	h.sshMgr.InvalidateRemoteCache(id)
 

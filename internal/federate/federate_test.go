@@ -213,7 +213,4 @@ func TestNormalizeURL(t *testing.T) {
 			t.Errorf("Setup with id %q: %v", bad, err)
 		}
 	}
-	if err := federate.Probe("https://x.relay.socket.cat"); err == nil || !strings.Contains(err.Error(), "device pairing") {
-		t.Errorf("socket.cat probe: %v", err)
-	}
 }

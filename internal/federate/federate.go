@@ -167,6 +167,9 @@ func NormalizeURL(raw string) (origin, host string, port int, err error) {
 	return origin, host, port, nil
 }
 
+// roots verifies unpinned certificates; nil is the system's (tests set one).
+var roots *x509.CertPool
+
 // tlsConfig checks the remote's certificate against the system roots, or,
 // when pin is set, by the SHA-256 of its (self-signed) leaf alone. With learn
 // set (setup), a leaf the system roots reject is let through and its pin
@@ -189,7 +192,7 @@ func tlsConfig(host, pin string, learn *string) *tls.Config {
 				}
 				return nil
 			}
-			opts := x509.VerifyOptions{DNSName: host, Intermediates: x509.NewCertPool()}
+			opts := x509.VerifyOptions{DNSName: host, Roots: roots, Intermediates: x509.NewCertPool()}
 			for _, c := range cs.PeerCertificates[1:] {
 				opts.Intermediates.AddCert(c)
 			}

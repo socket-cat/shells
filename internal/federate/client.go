@@ -66,7 +66,13 @@ func dial(r *remote, learn *string) (*client, *ack, error) {
 	// client), while its check of a present one reads the Host header that
 	// Go's server strips, so with SHELLS_CHECK_ORIGIN=true and no proxy any
 	// Origin is refused.
-	c := &client{r: r, tls: tlsConfig(u.Hostname(), r.TLSPin, learn), header: http.Header{}, in: make(chan []byte, 64)}
+	pin := r.TLSPin
+	if r.GUC != "" {
+		// The GUC is a bearer credential for the whole relay route: it goes
+		// only to a certificate the roots vouch for, never on first use.
+		pin, learn = "", nil
+	}
+	c := &client{r: r, tls: tlsConfig(u.Hostname(), pin, learn), header: http.Header{}, in: make(chan []byte, 64)}
 	if r.GUC != "" {
 		c.header.Set("Cookie", "GUC="+r.GUC)
 	}
@@ -106,6 +112,9 @@ func dial(r *remote, learn *string) (*client, *ack, error) {
 // in r, then the stored hash finishes the handshake.
 func connect(r *remote) (*client, error) {
 	c, a, err := dial(r, nil)
+	if relayRefused(err) && r.GUC != "" {
+		return nil, errors.New("socket.cat refused this server's pairing (unused for 7 days, or revoked): add the connection again in the picker")
+	}
 	if err != nil {
 		return nil, err
 	}

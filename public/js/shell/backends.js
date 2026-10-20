@@ -41,6 +41,22 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     } catch {}
   },
 
+  // A socket.cat name is behind the relay's login: this server gets its own
+  // session once the owner approves the code on socket.cat.
+  _approvePairing(url, pair) {
+    const body = createFingerprintDialogBody(
+      `${url} is a socket.cat app: this server needs your approval on socket.cat first.\n\n` +
+      `Code: ${pair.code}\n\nOpen the link, check the code, approve, then press Continue.\n\n`
+    );
+    const link = document.createElement('a');
+    link.href = pair.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = pair.url;
+    body.appendChild(link);
+    return window.TuiDialog.confirm('Approve on socket.cat', body, { confirmText: 'Continue', cancelText: 'Cancel', size: 'medium' });
+  },
+
   _parseSSHInput(input) {
     const trimmed = (input || '').trim();
     if (/^https:\/\//i.test(trimmed)) {
@@ -329,9 +345,13 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         let statusClose = TuiDialog.status(`Probing ${what}...`, `Checking connectivity to ${host}...`);
         let setupStatusClose = null;
         try {
-          const probeRes = await this.encryptedFetch('/api/ssh-probe', kind ? { url } : { host, user, port });
+          let probeRes = await this.encryptedFetch('/api/ssh-probe', kind ? { url } : { host, user, port });
           statusClose();
           statusClose = null;
+          while (kind && probeRes.data && probeRes.data.pair) {
+            if (!await this._approvePairing(url, probeRes.data.pair)) return;
+            probeRes = await this.encryptedFetch('/api/ssh-probe', { url });
+          }
           const probeData = probeRes.data || {};
 
           if (probeRes.error && probeRes.error.includes('not available')) {

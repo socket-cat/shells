@@ -16,9 +16,16 @@ import (
 )
 
 // handleShellsProbe: reachable as a shells remote → the picker asks for the
-// secret (keyReady false), as ssh-probe makes it ask for a password.
+// secret (keyReady false), as ssh-probe makes it ask for a password. A
+// socket.cat name first answers pair: the code to approve on socket.cat.
 func (h *Handler) handleShellsProbe(w http.ResponseWriter, rawURL string) {
-	if err := federate.Probe(rawURL); err != nil {
+	err := federate.Probe(rawURL)
+	var pair *federate.PairError
+	if errors.As(err, &pair) {
+		util.SendJSON(w, 200, map[string]any{"pair": map[string]string{"code": pair.Code, "url": pair.URL}}, nil)
+		return
+	}
+	if err != nil {
 		util.SendJSON(w, 200, map[string]any{"unreachable": true, "error": err.Error()}, nil)
 		return
 	}
