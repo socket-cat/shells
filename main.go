@@ -53,8 +53,9 @@ var embedVersion []byte
 
 func main() {
 	// Client commands for shells remotes, like ssh from a terminal: they run
-	// instead of the server (no supervisor, no config).
-	if len(os.Args) > 1 && (os.Args[1] == "exec" || os.Args[1] == "connect") {
+	// instead of the server (no supervisor, no config). Any other argument
+	// (-h, a typo) gets the usage; only a bare `shells` starts the server.
+	if len(os.Args) > 1 {
 		connections, keys := config.SSHPaths(config.KeyDir())
 		os.Exit(federate.Main(os.Args[1:], keys, func(name string) (string, error) {
 			return ssh.ResolveShells(connections, name)

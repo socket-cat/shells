@@ -30,7 +30,7 @@ import (
 	"shells/internal/util"
 )
 
-const usage = "usage: shells exec <name> [--] <command>\n       shells connect <name>"
+const usage = "usage: shells                               the server, configured by SHELLS_* env (README)\n       shells exec <name> [--] <command>\n       shells connect <name>"
 
 // Main runs a client command, like ssh does from a terminal: args[0] is
 // "exec" or "connect", <name> a shells connection of the picker (label,
