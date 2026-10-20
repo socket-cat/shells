@@ -34,6 +34,9 @@ func (e *PairError) Error() string { return "approve code " + e.Code + " at " + 
 // approved session, until Setup stores it in <id>.shells. In memory: a
 // restart in between costs a new code; the unused session expires in
 // socket.cat's 7-day idle GC.
+// ponytail: one lock held across the socket.cat call (15 s timeout), so a
+// slow socket.cat stalls other origins' probes too; per-origin locks if
+// pairings ever overlap.
 var pairing = struct {
 	sync.Mutex
 	m map[string]*pend
