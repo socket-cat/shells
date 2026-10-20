@@ -77,10 +77,11 @@ func TestSetupRun(t *testing.T) {
 		code            int
 	}{
 		{"echo hi; exit 3", "", "hi\n", 3},
-		{"cat", "a\nb", "a\nb", 0},                      // stdin sent, then ^D; not echoed back
-		{"echo out; echo err >&2", "", "out\nerr\n", 0}, // merged streams
-		{`echo 'it''s' "a'b"`, "", "its a'b\n", 0},      // quotes survive the eval quoting
-		{"kill -9 $$", "", "", 137},                     // a signal is 128+n
+		{"echo a; sleep 0.001; echo b", "", "a\nb\n", 0}, // b is flushed after the exit frame
+		{"cat", "a\nb", "a\nb", 0},                       // stdin sent, then ^D; not echoed back
+		{"echo out; echo err >&2", "", "out\nerr\n", 0},  // merged streams
+		{`echo 'it''s' "a'b"`, "", "its a'b\n", 0},       // quotes survive the eval quoting
+		{"kill -9 $$", "", "", 137},                      // a signal is 128+n
 	} {
 		res := run(t, keys, tc.cmd, tc.stdin, nil)
 		if res.err != nil || res.code != tc.code || res.out != tc.out {

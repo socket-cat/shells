@@ -48,9 +48,12 @@ func gated(gate, cmd string) (command, marker string) {
 	return fmt.Sprintf(gate, nonce, strings.ReplaceAll(cmd, "'", `'\''`)), "shells-gate-" + nonce
 }
 
-// exitGrace is how long the client keeps reading after the exit frame: the
-// remote sends its last output up to one 8 ms coalescing tick behind it.
-const exitGrace = 100 * time.Millisecond
+// exitIdle is how long the client keeps reading after the exit frame, and
+// after each output frame behind it: the remote flushes its last coalesced
+// output up to one 8 ms tick after sending exit.
+// ponytail: a timing bound (the tick plus scheduling and network jitter, not
+// a retransmitted packet); pipe mode sends exit behind all output.
+const exitIdle = 25 * time.Millisecond
 
 // goneGrace is how long the client waits for the exit frame after the
 // session is gone (the remote sends "gone" first).
@@ -214,6 +217,9 @@ func (c *client) relay(sid, marker string, in io.Reader, out io.Writer, sigs <-c
 				if len(plain) < 16 || !bytes.Equal(plain[:16], sidBuf) {
 					continue
 				}
+				if haveCode {
+					grace = time.After(exitIdle)
+				}
 				if gated {
 					if _, err := out.Write(plain[16:]); errors.Is(err, syscall.EPIPE) {
 						return 128 + int(syscall.SIGPIPE), nil // `| head`: quiet, like a local pipeline
@@ -236,7 +242,7 @@ func (c *client) relay(sid, marker string, in io.Reader, out io.Writer, sigs <-c
 					ready = true
 				case "exit":
 					code, haveCode = exitCode(m.ExitCode, m.Signal), true
-					grace = time.After(exitGrace)
+					grace = time.After(exitIdle)
 				case "gone":
 					if grace == nil {
 						grace = time.After(goneGrace)
