@@ -14,6 +14,7 @@ package websocket
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
@@ -22,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -124,6 +126,53 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error
 	return c, nil
 }
 
+// Client runs the opening handshake as the client on conn (already dialed,
+// TLS or not) for the ws/wss URL u, with extra request headers (Origin,
+// Cookie), and returns a Conn that masks what it sends. The caller sets
+// OnMessage/OnClose and then calls Start, as for an upgraded Conn.
+func Client(conn net.Conn, u *url.URL, header http.Header) (*Conn, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, err
+	}
+	key := base64.StdEncoding.EncodeToString(nonce[:])
+	req := &http.Request{Method: http.MethodGet, URL: u, Host: u.Host, Header: header.Clone()}
+	if req.Header == nil {
+		req.Header = http.Header{}
+	}
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Sec-WebSocket-Key", key)
+	req.Header.Set("Sec-WebSocket-Version", "13")
+
+	_ = conn.SetDeadline(time.Now().Add(clientHandshakeTimeout))
+	if err := req.Write(conn); err != nil {
+		return nil, fmt.Errorf("websocket: write handshake: %w", err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		return nil, fmt.Errorf("websocket: read handshake: %w", err)
+	}
+	resp.Body.Close() // a 101 has no body; br keeps any frame bytes after it
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		return nil, fmt.Errorf("websocket: handshake refused: %s", resp.Status)
+	}
+	if !headerContains(resp.Header, "Upgrade", "websocket") ||
+		!headerContains(resp.Header, "Connection", "upgrade") ||
+		resp.Header.Get("Sec-WebSocket-Accept") != computeAccept(key) {
+		return nil, errors.New("websocket: bad handshake response")
+	}
+	_ = conn.SetDeadline(time.Time{})
+
+	c := newConn(conn, br)
+	c.client = true
+	return c, nil
+}
+
+// clientHandshakeTimeout bounds Client's request/response exchange.
+const clientHandshakeTimeout = 15 * time.Second
+
 func computeAccept(key string) string {
 	h := sha1.New()
 	h.Write([]byte(key + wsGUID))
@@ -173,6 +222,10 @@ type Conn struct {
 	closeQueued   atomic.Bool
 	closeSent     chan struct{}
 	closeSentOnce sync.Once
+
+	// client is set by Client: outbound frames are masked and inbound ones
+	// must not be (RFC 6455 §5.1).
+	client bool
 
 	// Public callbacks — set by the caller before Start.
 	OnMessage func(payload []byte, isBinary bool)
@@ -244,7 +297,7 @@ func (c *Conn) send(payload []byte, op byte) bool {
 	if c.closed.Load() {
 		return false
 	}
-	frame := encodeFrame(payload, op)
+	frame := encodeFrame(payload, op, c.client)
 	c.queueMu.Lock()
 	if c.closing {
 		c.queueMu.Unlock()
@@ -267,7 +320,7 @@ func (c *Conn) Close(code int, reason string) {
 	c.closeOnce.Do(func() {
 		c.queueMu.Lock()
 		c.closing = true
-		c.queue = append(c.queue, encodeFrame(payload, OpClose))
+		c.queue = append(c.queue, encodeFrame(payload, OpClose, c.client))
 		c.closeQueued.Store(true)
 		c.queueMu.Unlock()
 		c.cond.Signal()
@@ -319,7 +372,7 @@ func (c *Conn) signalCloseSent() {
 	c.closeSentOnce.Do(func() { close(c.closeSent) })
 }
 
-// payloadLenOf extracts the payload length from an encoded server frame.
+// payloadLenOf extracts the payload length from an encoded frame.
 func payloadLenOf(frame []byte) int64 {
 	if len(frame) < 2 {
 		return 0
@@ -347,7 +400,7 @@ func (c *Conn) readLoop() {
 	var fragOp byte
 
 	for {
-		_, payload, op, fin, err := readFrame(c.br)
+		_, payload, op, fin, err := readFrame(c.br, c.client)
 		if err != nil {
 			c.handleClose(-1, "")
 			return
@@ -429,30 +482,46 @@ func (c *Conn) Done() <-chan struct{} { return c.done }
 
 // --- frame codec ---
 
-// encodeFrame builds a complete server→client frame (FIN=1, unmasked).
-func encodeFrame(payload []byte, op byte) []byte {
+// encodeFrame builds a complete frame (FIN=1): unmasked server→client, or
+// masked with a fresh random key when the client sends it.
+func encodeFrame(payload []byte, op byte, masked bool) []byte {
 	n := len(payload)
 	hdr := []byte{0x80 | op} // FIN + opcode
+	var maskBit byte
+	if masked {
+		maskBit = 0x80
+	}
 
 	switch {
 	case n < 126:
-		hdr = append(hdr, byte(n))
+		hdr = append(hdr, maskBit|byte(n))
 	case n <= 65535:
-		hdr = append(hdr, 126)
+		hdr = append(hdr, maskBit|126)
 		hdr = binary.BigEndian.AppendUint16(hdr, uint16(n))
 	default:
-		hdr = append(hdr, 127)
+		hdr = append(hdr, maskBit|127)
 		hdr = binary.BigEndian.AppendUint64(hdr, uint64(n))
+	}
+	var mask [4]byte
+	if masked {
+		_, _ = rand.Read(mask[:])
+		hdr = append(hdr, mask[:]...)
 	}
 
 	frame := make([]byte, len(hdr)+n)
 	copy(frame, hdr)
 	copy(frame[len(hdr):], payload)
+	if masked {
+		for i := range n {
+			frame[len(hdr)+i] ^= mask[i%4]
+		}
+	}
 	return frame
 }
 
-// readFrame reads a single frame from the buffered reader.
-func readFrame(br *bufio.Reader) (hdr []byte, payload []byte, op byte, fin bool, err error) {
+// readFrame reads a single frame from the buffered reader. A server reads
+// masked client frames; a client (client=true) reads unmasked server frames.
+func readFrame(br *bufio.Reader, client bool) (hdr []byte, payload []byte, op byte, fin bool, err error) {
 	b2, err := br.Peek(2)
 	if err != nil {
 		return nil, nil, 0, false, err
@@ -467,9 +536,10 @@ func readFrame(br *bufio.Reader) (hdr []byte, payload []byte, op byte, fin bool,
 	if b2[0]&0x70 != 0 {
 		return nil, nil, 0, false, fmt.Errorf("websocket: RSV bits set")
 	}
-	// Client-to-server frames MUST be masked (RFC 6455 §5.1).
-	if !masked {
-		return nil, nil, 0, false, fmt.Errorf("websocket: unmasked client frame")
+	// Client-to-server frames MUST be masked, server-to-client frames MUST
+	// NOT be (RFC 6455 §5.1).
+	if masked == client {
+		return nil, nil, 0, false, fmt.Errorf("websocket: bad frame masking (masked=%v)", masked)
 	}
 
 	switch length {

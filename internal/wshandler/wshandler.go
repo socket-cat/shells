@@ -67,9 +67,10 @@ type ClientConn struct {
 	handler *Handler
 	cfg     *config.Config
 
-	state *crypto.State
-	ready atomic.Bool
-	token string
+	state   *crypto.State
+	stateMu sync.RWMutex // Destroy (readLoop) vs. sendEncrypted (any goroutine)
+	ready   atomic.Bool
+	token   string
 
 	handshakeDone atomic.Bool // prevents crypto-ready replay
 
@@ -291,7 +292,9 @@ func (cc *ClientConn) cleanup() {
 	if cc.token != "" {
 		cc.handler.auth.Revoke(cc.token)
 	}
+	cc.stateMu.Lock()
 	crypto.Destroy(cc.state)
+	cc.stateMu.Unlock()
 
 	cc.mu.Lock()
 	for sid, st := range cc.attached {
@@ -735,22 +738,18 @@ func (cc *ClientConn) sendEncrypted(data []byte, sidBuf []byte) {
 	if cc.closed.Load() || !cc.ready.Load() {
 		return
 	}
-	var frame []byte
+	frameType := msgTypeControl
 	if sidBuf != nil {
 		plaintext := make([]byte, 16+len(data))
 		copy(plaintext[:16], sidBuf)
 		copy(plaintext[16:], data)
-		f, err := crypto.EncryptFrame(cc.state, plaintext, msgTypeData)
-		if err != nil {
-			return
-		}
-		frame = f
-	} else {
-		f, err := crypto.EncryptFrame(cc.state, data, msgTypeControl)
-		if err != nil {
-			return
-		}
-		frame = f
+		data, frameType = plaintext, msgTypeData
+	}
+	cc.stateMu.RLock()
+	frame, err := crypto.EncryptFrame(cc.state, data, frameType) // errors once Destroy ran
+	cc.stateMu.RUnlock()
+	if err != nil {
+		return
 	}
 	cc.ws.SendBinary(frame)
 }

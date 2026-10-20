@@ -27,6 +27,7 @@ import (
 // Backend describes how a session's process should be launched.
 type Backend struct {
 	Type         string // "" (local), "ssh"
+	Kind         string // with Type "ssh": "" (the ssh binary) or "shells" (a shells remote, no user)
 	ConnectionID string
 	Host         string
 	User         string
@@ -220,7 +221,7 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		if m.SpawnSSH == nil {
 			return nil, fmt.Errorf("SSH backend not available")
 		}
-		if backend.Host == "" || backend.User == "" {
+		if backend.Host == "" || (backend.User == "" && backend.Kind != "shells") {
 			return nil, fmt.Errorf("SSH backend requires host and user")
 		}
 		// Validate the remote cwd and bare command BEFORE spawn so a bogus

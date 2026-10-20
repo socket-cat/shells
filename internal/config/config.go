@@ -161,10 +161,7 @@ func Load(version string) (*Config, error) {
 	}
 
 	// Key directory.
-	c.ServerKeyDir = firstNonEmpty(
-		os.Getenv("SHELLS_KEY_DIR"),
-		filepath.Join(homeDir(), ".socket.cat", "config", "shells"),
-	)
+	c.ServerKeyDir = KeyDir()
 	if err := ensureDirMode(c.ServerKeyDir, 0o700); err != nil {
 		return nil, fmt.Errorf("key dir %s: %w", c.ServerKeyDir, err)
 	}
@@ -174,9 +171,8 @@ func Load(version string) (*Config, error) {
 	c.RecentCommandsFile = filepath.Join(c.ServerKeyDir, "recent-commands.json")
 	c.SecretFile = filepath.Join(c.ServerKeyDir, "secret.txt")
 	c.SaltFile = filepath.Join(c.ServerKeyDir, "salt.txt")
-	c.SSHConnectionsFile = filepath.Join(c.ServerKeyDir, "ssh-connections.json")
 	c.BrandingFile = filepath.Join(c.ServerKeyDir, "branding.json")
-	c.SSHKeysDir = filepath.Join(c.ServerKeyDir, "ssh-keys")
+	c.SSHConnectionsFile, c.SSHKeysDir = SSHPaths(c.ServerKeyDir)
 
 	// Resolve secret.
 	secret, src, err := resolveSecret(c.SecretFile)
@@ -287,6 +283,17 @@ func EnvTrue(v string) bool {
 // No generic HOST alias: tcsh/csh export HOST=<hostname> into every child.
 func ListenHost() string {
 	return firstNonEmpty(os.Getenv("SHELLS_HOST"), "127.0.0.1")
+}
+
+// KeyDir is the key directory: $SHELLS_KEY_DIR or ~/.socket.cat/config/shells.
+// The client commands (shells exec/connect) use it without loading the server.
+func KeyDir() string {
+	return firstNonEmpty(os.Getenv("SHELLS_KEY_DIR"), filepath.Join(homeDir(), ".socket.cat", "config", "shells"))
+}
+
+// SSHPaths are the remote connections list and the keys directory in keyDir.
+func SSHPaths(keyDir string) (connectionsFile, keysDir string) {
+	return filepath.Join(keyDir, "ssh-connections.json"), filepath.Join(keyDir, "ssh-keys")
 }
 
 func firstNonEmpty(vals ...string) string {

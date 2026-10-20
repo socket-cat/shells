@@ -465,3 +465,30 @@ func TestSessionsSSHBadCwdOverWire(t *testing.T) {
 	}
 	mgr.DestroyAll()
 }
+
+// TestParseBackendShellsKind: a shells remote is an ssh backend with kind
+// "shells" and no user; anything else under that kind, or an unknown kind,
+// is refused.
+func TestParseBackendShellsKind(t *testing.T) {
+	id := "0b7a3c52-5d1e-4f6a-9c3b-2e8d7f1a4b60"
+	ok := map[string]any{"type": "ssh", "kind": "shells", "connectionId": id, "host": "shells-x.relay.union.cat", "port": float64(443)}
+	if b := parseBackend(map[string]any{"backend": ok}); b == nil || b.Kind != "shells" || b.Port != 443 || b.ConnectionID != id {
+		t.Fatalf("parseBackend(shells) = %+v", b)
+	}
+	for name, change := range map[string][2]any{
+		"user":         {"user", "root"},
+		"bad host":     {"host", "-x"},
+		"no id":        {"connectionId", ""},
+		"bad port":     {"port", float64(70000)},
+		"unknown kind": {"kind", "telnet"},
+	} {
+		raw := map[string]any{}
+		for k, v := range ok {
+			raw[k] = v
+		}
+		raw[change[0].(string)] = change[1]
+		if b := parseBackend(map[string]any{"backend": raw}); b != nil {
+			t.Errorf("%s: parseBackend = %+v, want nil", name, b)
+		}
+	}
+}

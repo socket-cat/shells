@@ -473,6 +473,9 @@ func (m *Manager) ValidateRemote(connID, host, user string, port int, cwd, comma
 // ValidateRemote. It can be assigned directly in main.go.
 func (m *Manager) Validate() func(backend *session.Backend, command, cwd string) (session.ValidateResult, error) {
 	return func(b *session.Backend, command, cwd string) (session.ValidateResult, error) {
+		if b.Kind == "shells" {
+			return session.ValidateOK, nil // the remote checks both when spawnShells opens the session
+		}
 		return m.ValidateRemote(b.ConnectionID, b.Host, b.User, b.Port, cwd, command)
 	}
 }

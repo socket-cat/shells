@@ -31,6 +31,7 @@ type Connection struct {
 	Port      int    `json:"port"`
 	Hostname  string `json:"hostname,omitempty"`
 	HasOurKey bool   `json:"hasOurKey"`
+	Kind      string `json:"kind,omitempty"` // "" (ssh) or "shells": a shells remote over https, no User
 }
 
 // Manager handles SSH connection persistence and key management.
@@ -151,6 +152,9 @@ func (m *Manager) findByHostUser(host, user string, port int) *Connection {
 // SpawnSSH callback signature so main.go can assign it directly.
 func Spawn(cfg *config.Config) func(backend *session.Backend, cols, rows int, command, cwd string) (*pty.Term, string, string, error) {
 	return func(backend *session.Backend, cols, rows int, command, cwd string) (*pty.Term, string, string, error) {
+		if backend.Kind == "shells" {
+			return spawnShells(cfg, backend, cols, rows, command, cwd)
+		}
 		if !hasSSH() {
 			return nil, "", "", errors.New("ssh not available")
 		}
@@ -399,7 +403,7 @@ func GenerateKeyPair(keysDir, connectionID string) error {
 
 func deleteKeyFiles(keysDir, connectionID string) {
 	keyPath := filepath.Join(keysDir, connectionID)
-	for _, suffix := range []string{"", ".pub", ".known_hosts"} {
+	for _, suffix := range []string{"", ".pub", ".known_hosts", ".shells"} {
 		_ = os.Remove(keyPath + suffix)
 	}
 }
@@ -416,7 +420,7 @@ func (m *Manager) cleanupOrphanedKeys() {
 	seen := make(map[string]bool)
 	for _, entry := range entries {
 		name := entry.Name()
-		id := strings.TrimSuffix(strings.TrimSuffix(name, ".pub"), ".known_hosts")
+		id := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(name, ".pub"), ".known_hosts"), ".shells")
 		if seen[id] {
 			continue
 		}

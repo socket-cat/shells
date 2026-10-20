@@ -50,6 +50,25 @@ with TLS (the PWA needs HTTPS).
 - **Mobile-first** — installable PWA, touch gestures, on-screen keyboard picker.
 - **Rootless** — runs as your user, no sudo.
 
+## Reach another shells
+
+For a box you can reach only through its shells app (its sshd closed): in
+the new-session picker type its `https://host[:port]` where you would type
+`user@host`, then its secret. It joins your connections like an SSH host —
+folder and command pickers, sessions in this UI — and the CLI resolves the
+same list by label (the remote's hostname) or host, like `ssh host`:
+
+```bash
+shells exec dev-box -- 'cd /srv/x && git status'   # exit code kept
+shells connect dev-box                             # interactive
+```
+
+The remote needs no change, only HTTPS (`SHELLS_TLS=on` or a TLS proxy).
+Its key and TLS certificate are pinned on first use; only a hash of the
+secret is stored, 0600 beside the SSH keys. `exec` runs in a PTY, so stdout
+and stderr arrive merged. socket.cat relay names aren't supported yet — use
+the box's own address or its blind `union.cat` name.
+
 ## Configure
 
 | Variable | Default | What |

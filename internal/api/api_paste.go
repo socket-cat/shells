@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"shells/internal/federate"
 	"shells/internal/session"
 	"shells/internal/util"
 )
@@ -166,6 +167,25 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 		if s := h.manager.Get(sid); s != nil && s.Backend != nil && s.Backend.Type == "ssh" {
 			remoteBackend = s.Backend
 		}
+	}
+
+	if remoteBackend != nil && remoteBackend.Kind == "shells" {
+		// A shells remote stores it with its own paste endpoint (its paste
+		// dir, its cleanup) and hands back the path.
+		out, err := federate.Call(h.cfg.SSHKeysDir, remoteBackend.ConnectionID, "/api/paste-image",
+			map[string]any{"image": base64.StdEncoding.EncodeToString(raw), "name": id + ext})
+		// The browser types the path at the prompt: a plain absolute path
+		// only, never what a remote might smuggle in (spaces, ;, CR).
+		p, _ := out["path"].(string)
+		if err == nil && (!strings.HasPrefix(p, "/") || !util.OnlyChars(p, util.Alnum+"/._-")) {
+			err = fmt.Errorf("unexpected path %q", p)
+		}
+		if err != nil {
+			util.SendJSON(w, 200, map[string]any{"error": fmt.Sprintf("failed to save remote file: %v", err)}, nil)
+			return
+		}
+		util.SendJSON(w, 200, map[string]any{"path": p}, nil)
+		return
 	}
 
 	if remoteBackend != nil && h.sshMgr != nil {

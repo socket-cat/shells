@@ -118,7 +118,7 @@ func (t *Term) Write(data []byte) (int, error) { return t.master.Write(data) }
 
 // Resize updates the PTY window size.
 func (t *Term) Resize(cols, rows int) error {
-	return setWinsize(t.master.Fd(), cols, rows)
+	return t.withFd(func(fd uintptr) error { return setWinsize(fd, cols, rows) })
 }
 
 // SignalWinch delivers SIGWINCH to the foreground process group of the PTY and
@@ -128,8 +128,12 @@ func (t *Term) Resize(cols, rows int) error {
 // (TIOCSIG cannot be used: the Linux kernel only honours SIGINT/SIGQUIT/SIGTSTP
 // there.)
 func (t *Term) SignalWinch() error {
+	return t.withFd(signalWinch)
+}
+
+func signalWinch(fd uintptr) error {
 	var ws winsize
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws))); errno != 0 {
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws))); errno != 0 {
 		return errno
 	}
 	// A diff-based full-screen TUI (pi/codex) only redraws its whole frame on a
@@ -137,11 +141,11 @@ func (t *Term) SignalWinch() error {
 	// rows/cols unchanged and is ignored. Bump the row count and restore it so
 	// the foreground process detects a resize and repaints fully.
 	ws.Row++
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCSWINSZ), uintptr(unsafe.Pointer(&ws))); errno != 0 {
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCSWINSZ), uintptr(unsafe.Pointer(&ws))); errno != 0 {
 		return errno
 	}
 	ws.Row--
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, t.master.Fd(), uintptr(syscall.TIOCSWINSZ), uintptr(unsafe.Pointer(&ws)))
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCSWINSZ), uintptr(unsafe.Pointer(&ws)))
 	if errno != 0 {
 		return errno
 	}
@@ -218,6 +222,21 @@ func (t *Term) dispatchExit(code int, signal string) {
 	for _, cb := range cbs {
 		cb(code, signal)
 	}
+}
+
+// withFd runs fn on the master fd while holding a reference on it, so fn can
+// neither race closeMaster nor hit a recycled descriptor: once the master is
+// closed it just returns an error.
+func (t *Term) withFd(fn func(fd uintptr) error) error {
+	rc, err := t.master.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var fnErr error
+	if err := rc.Control(func(fd uintptr) { fnErr = fn(fd) }); err != nil {
+		return err
+	}
+	return fnErr
 }
 
 func (t *Term) closeMaster() {

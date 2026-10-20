@@ -5,8 +5,13 @@ package websocket
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -194,4 +199,57 @@ func readOneFrameOp(t *testing.T, peer net.Conn) byte {
 		}
 	}
 	return hdr[0] & 0x0f
+}
+
+// TestClientEcho dials the package's own Upgrader with Client: the Origin
+// header arrives, masked client frames pass the server's check, unmasked
+// server frames pass the client's, at all three length encodings.
+func TestClientEcho(t *testing.T) {
+	origin := make(chan string, 1)
+	up := &Upgrader{CheckOrigin: func(r *http.Request) bool { origin <- r.Header.Get("Origin"); return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r)
+		if err != nil {
+			return
+		}
+		c.OnMessage = func(p []byte, isBinary bool) {
+			if isBinary {
+				c.SendBinary(p)
+			} else {
+				c.SendText(p)
+			}
+		}
+		go c.Start()
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(strings.Replace(srv.URL, "http", "ws", 1) + "/ws")
+	conn, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Client(conn, u, http.Header{"Origin": {srv.URL}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan []byte, 3)
+	c.OnMessage = func(p []byte, _ bool) { got <- p }
+	go c.Start()
+	defer c.Close(1000, "")
+
+	if o := <-origin; o != srv.URL {
+		t.Fatalf("Origin = %q", o)
+	}
+	for _, n := range []int{5, 300, 70000} {
+		msg := bytes.Repeat([]byte{'x'}, n)
+		c.SendBinary(msg)
+		select {
+		case p := <-got:
+			if !bytes.Equal(p, msg) {
+				t.Fatalf("echo of %d bytes came back as %d", n, len(p))
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no echo for %d bytes", n)
+		}
+	}
 }

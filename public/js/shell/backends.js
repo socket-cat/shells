@@ -43,6 +43,15 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
   _parseSSHInput(input) {
     const trimmed = (input || '').trim();
+    if (/^https:\/\//i.test(trimmed)) {
+      // A shells remote: same flow as user@host, no user (kind 'shells').
+      try {
+        const u = new URL(trimmed);
+        const port = parseInt(u.port) || 443;
+        const url = `https://${u.hostname}${port === 443 ? '' : ':' + port}`;
+        return { kind: 'shells', url, user: '', host: u.hostname, port };
+      } catch { return null; }
+    }
     if (!trimmed || !trimmed.includes('@')) return null;
     const atIndex = trimmed.lastIndexOf('@');
     const user = trimmed.substring(0, atIndex);
@@ -61,6 +70,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   },
 
   _connLabel(c) {
+    if (c.kind === 'shells') return c.port === 443 ? `https://${c.host}` : `https://${c.host}:${c.port}`;
     return c.port === 22 ? `${c.user}@${c.host}` : `${c.user}@${c.host}:${c.port}`;
   },
 
@@ -139,7 +149,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     let sessionTitle;
     if (backend && backend.type === 'ssh') {
-      const label = `${backend.user}@${backend.hostname || backend.host}`;
+      const label = backend.kind === 'shells' ? (backend.hostname || backend.host) : `${backend.user}@${backend.hostname || backend.host}`;
       const folder = finalCwd ? finalCwd.split('/').filter(Boolean).pop() || '/' : '/';
       sessionTitle = command ? `${label} > ${folder} > ${command}` : `${label} > ${folder}`;
     } else {
@@ -170,7 +180,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     updateCheckRow.appendChild(updateLabel);
 
     const backendInput = await window.TuiDialog.prompt('Backend', {
-      placeholder: 'user@host[:port] or localhost',
+      placeholder: 'user@host[:port], https://host[:port] or localhost',
       footerExtra: updateCheckRow,
       autocomplete: async (val) => {
         const connections = this._sshConnections || [];
@@ -224,7 +234,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
         const items = [];
         if (conn.hasOurKey) items.push('Public key from remote server');
-        items.push('SSH keys from this server');
+        items.push(conn.kind === 'shells' ? 'Stored secret hash from this server' : 'SSH keys from this server');
         items.push('Recent paths and commands');
 
         for (const item of items) {
@@ -241,7 +251,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
         warn.textContent = 'This cannot be undone.';
         message.appendChild(warn);
 
-        const confirmed = await window.TuiDialog.confirm('Remove SSH Connection', message, {
+        const confirmed = await window.TuiDialog.confirm(conn.kind === 'shells' ? 'Remove Shells Connection' : 'Remove SSH Connection', message, {
           dangerous: true,
           confirmText: 'Yes, remove',
           size: 'small',
@@ -303,22 +313,23 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
     if (backendInput === null) return;
 
-    this._saveRecentBackend(backendInput.toLowerCase() === 'localhost' ? 'localhost' : backendInput);
+    const parsed = this._parseSSHInput(backendInput);
+    this._saveRecentBackend(backendInput.toLowerCase() === 'localhost' ? 'localhost' : (parsed && parsed.kind ? parsed.url : backendInput));
 
     let backend = null;
-    const parsed = this._parseSSHInput(backendInput);
 
     if (parsed) {
-      const { user, host, port } = parsed;
-      let conn = this._sshConnections.find(c => c.host === host && c.user === user && c.port === port);
+      const { user, host, port, kind, url } = parsed;
+      const what = kind ? 'shells' : 'SSH';
+      let conn = this._sshConnections.find(c => c.host === host && c.user === user && c.port === port && (c.kind || '') === (kind || ''));
 
       if (conn) {
-        backend = { type: 'ssh', connectionId: conn.id, host, user, port, hostname: conn.hostname };
+        backend = { type: 'ssh', kind, connectionId: conn.id, host, user, port, hostname: conn.hostname };
       } else {
-        let statusClose = TuiDialog.status('Probing SSH...', `Checking connectivity to ${host}...`);
+        let statusClose = TuiDialog.status(`Probing ${what}...`, `Checking connectivity to ${host}...`);
         let setupStatusClose = null;
         try {
-          const probeRes = await this.encryptedFetch('/api/ssh-probe', { host, user, port });
+          const probeRes = await this.encryptedFetch('/api/ssh-probe', kind ? { url } : { host, user, port });
           statusClose();
           statusClose = null;
           const probeData = probeRes.data || {};
@@ -336,6 +347,16 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
               await this._saveSshConnections();
             }
             backend = { type: 'ssh', connectionId: conn.id, host, user, port, hostname: conn.hostname };
+          } else if (probeData.unreachable && kind) {
+            const errBody = createFingerprintDialogBody(
+              `Could not reach ${url}\n\n${probeData.error || ''}\n\n` +
+              `Possible causes:\n` +
+              `  - Wrong URL, or no shells answering there\n` +
+              `  - Its TLS is off (it needs SHELLS_TLS=on or a proxy with https)\n` +
+              `  - Firewall or IP allowlist blocking this server`
+            );
+            await window.TuiDialog.alert('Connection Failed', errBody, { size: 'medium' });
+            return;
           } else if (probeData.unreachable) {
             const errBody = createFingerprintDialogBody(
               `Could not reach ${host}:${port}\n\n` +
@@ -349,36 +370,40 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           } else {
             let setupOk = false;
             while (!setupOk) {
-              const password = await window.TuiDialog.prompt('SSH Password', {
-                description: `No SSH keys found for ${host}.\nEnter your password to install a public key.\nFuture connections will not require a password.`,
+              const password = await window.TuiDialog.prompt(kind ? 'Shells Secret' : 'SSH Password', {
+                description: kind
+                  ? `Enter the E2E secret of ${url}.\nOnly its hash is kept on this server.\nFuture connections will not ask again.`
+                  : `No SSH keys found for ${host}.\nEnter your password to install a public key.\nFuture connections will not require a password.`,
                 inputType: 'password',
-                placeholder: 'password',
+                placeholder: kind ? 'secret' : 'password',
               });
               if (!password) return;
 
-              setupStatusClose = TuiDialog.status('Installing key...', `Setting up SSH for ${user}@${host}...`);
-              const setupRes = await this.encryptedFetch('/api/ssh-setup', { host, user, port, password });
+              const label = kind ? url : `${user}@${host}`;
+              setupStatusClose = TuiDialog.status(kind ? 'Checking secret...' : 'Installing key...', `Setting up ${what} for ${label}...`);
+              const setupRes = await this.encryptedFetch('/api/ssh-setup', kind ? { url, password } : { host, user, port, password });
               setupStatusClose();
               setupStatusClose = null;
               const setupData = setupRes.data || {};
 
               if (setupRes.ok) {
-                conn = { id: setupData.id, host, user, port, hasOurKey: true, hostname: setupData.hostname };
+                conn = { id: setupData.id, kind, host, user, port, hasOurKey: !kind, hostname: setupData.hostname };
                 this._sshConnections.push(conn);
-                await this._saveSshConnections();
-                backend = { type: 'ssh', connectionId: conn.id, host, user, port, hostname: conn.hostname };
+                if (!kind) await this._saveSshConnections();
+                backend = { type: 'ssh', kind, connectionId: conn.id, host, user, port, hostname: conn.hostname };
                 setupOk = true;
               } else {
                 const hint = setupData.code === 'max_attempts' ? 'The password was incorrect.'
+                  : setupData.code === 'wrong_secret' ? 'The secret was incorrect.'
                   : setupData.code === 'timeout' ? 'The connection timed out.'
                   : setupData.code === 'install_failed' ? 'The server rejected key installation.'
                   : '';
                 const errBody = createFingerprintDialogBody(
-                  `Failed to set up SSH for ${user}@${host}\n\n` +
+                  `Failed to set up ${what} for ${label}\n\n` +
                   (setupData.error || 'Unknown error') +
                   (hint ? '\n\n' + hint : '\n\nYou can try:\n  - Check the password is correct\n  - Verify SSH is running on the host')
                 );
-                const retry = await window.TuiDialog.confirm('SSH Setup Failed', errBody, {
+                const retry = await window.TuiDialog.confirm(`${kind ? 'Shells' : 'SSH'} Setup Failed`, errBody, {
                   confirmText: 'Retry',
                   cancelText: 'Cancel',
                   size: 'medium',
@@ -392,7 +417,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
           if (statusClose) { statusClose(); }
           if (setupStatusClose) { setupStatusClose(); }
           const errBody = createFingerprintDialogBody(
-            `SSH connection to ${user}@${host} failed\n\n` +
+            `${what} connection to ${kind ? url : `${user}@${host}`} failed\n\n` +
             (err.message || 'Unknown error') +
             '\n\nYou can try:\n  - Verify the hostname and port\n  - Check that SSH is running on the host'
           );
@@ -406,7 +431,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
     const lsCache = new Map();
     const isSSH = backend && backend.type === 'ssh' && backend.connectionId;
 
-    let loadStatusClose = isSSH ? window.TuiDialog.status('Connecting...', `Loading paths from ${backend.user}@${backend.host}...`) : null;
+    let loadStatusClose = isSSH ? window.TuiDialog.status('Connecting...', `Loading paths from ${this._connLabel(backend)}...`) : null;
 
     const loadPath = async (p) => {
       if (lsCache.has(p)) return lsCache.get(p);
@@ -432,8 +457,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       if (!sshHome) {
         if (loadStatusClose) { loadStatusClose(); }
         const errBody = createFingerprintDialogBody(
-          `Could not connect to ${backend.user}@${backend.host}\n\n` +
-          `The SSH connection failed. The host may be unreachable or the SSH service may not be running.\n\n` +
+          `Could not connect to ${this._connLabel(backend)}\n\n` +
+          `The ${backend.kind ? 'shells' : 'SSH'} connection failed. The host may be unreachable or the ${backend.kind ? 'shells' : 'SSH'} service may not be running.\n\n` +
           `You can try:\n  - Verify the host is reachable\n  - Check that SSH is running on the host\n  - Remove and re-add the connection`
         );
         await window.TuiDialog.alert('Connection Failed', errBody, { size: 'medium' });
@@ -487,7 +512,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       return suggestions;
     };
 
-    const defaultPath = recent.length > 0 ? recent[0] : home;    const folderDesc = isSSH ? `${backend.user}@${backend.host}` : null;
+    const defaultPath = recent.length > 0 ? recent[0] : home;    const folderDesc = isSSH ? this._connLabel(backend) : null;
     const cwd = await window.TuiDialog.prompt('Project folder', {
       description: folderDesc,
       placeholder: `Folder name or Enter to open in ${defaultPath}`,
@@ -555,7 +580,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       return suggestions;
     };
 
-    const cmdDesc = isSSH ? `${backend.user}@${backend.host} — ${final}` : final;
+    const cmdDesc = isSSH ? `${this._connLabel(backend)} — ${final}` : final;
     const cmd = await window.TuiDialog.prompt('Command', {
       description: cmdDesc,
       placeholder: `Command or Enter for ${defaultCommand}`,

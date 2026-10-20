@@ -932,8 +932,9 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
 
   _getRemoteBadgeFromTitle(title) {
     if (!title) return null;
-    // Server titles: "ssh: user@host" or "ssh: hostname" (when hostname is known).
-    const body = title.startsWith('ssh: ') ? title.slice(5) : title;
+    // Server titles: "ssh: user@host", "ssh: hostname" (when hostname is known)
+    // or "shells: hostname" (a shells remote).
+    const body = title.replace(/^(ssh|shells): /, '');
     const match = body.match(/([a-zA-Z0-9_.-]+)@([a-zA-Z0-9.-]+)/);
     if (match) return this._getBackendBadge({ user: match[1], host: match[2], port: 22 });
     const host = body.trim();

@@ -618,13 +618,22 @@ func parseBackend(body map[string]any) *session.Backend {
 	host, _ := raw["host"].(string)
 	user, _ := raw["user"].(string)
 	hostname, _ := raw["hostname"].(string)
-	if host != "" || user != "" {
+	kind, _ := raw["kind"].(string)
+	switch {
+	case kind == "shells":
+		if user != "" || !util.ValidHostname(host) || port < 1 || port > 65535 || connectionID == "" {
+			return nil
+		}
+	case kind != "":
+		return nil
+	case host != "" || user != "":
 		if err := ssh.ValidateParams(host, user, port); err != nil {
 			return nil
 		}
 	}
 	return &session.Backend{
 		Type:         btype,
+		Kind:         kind,
 		ConnectionID: connectionID,
 		Host:         host,
 		User:         user,

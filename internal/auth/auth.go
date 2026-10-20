@@ -96,7 +96,7 @@ func (s *Store) HasAllowedOrigin(r *http.Request) bool {
 
 	host := r.Header.Get("X-Forwarded-Host")
 	if host == "" {
-		host = r.Header.Get("Host")
+		host = r.Host
 	}
 	if host == "" {
 		return false

@@ -106,6 +106,10 @@ func (h *Handler) handleSSHProbe(w http.ResponseWriter, body map[string]any, r *
 		util.SendJSON(w, 200, map[string]any{"error": "Rate limit exceeded"}, nil)
 		return
 	}
+	if u, _ := body["url"].(string); u != "" {
+		h.handleShellsProbe(w, u)
+		return
+	}
 	host, _ := body["host"].(string)
 	user, _ := body["user"].(string)
 	port := 22
@@ -144,6 +148,10 @@ func (h *Handler) handleSSHSetup(w http.ResponseWriter, body map[string]any, r *
 		port = int(p)
 	}
 	password, _ := body["password"].(string)
+	if u, _ := body["url"].(string); u != "" {
+		h.handleShellsSetup(w, u, password)
+		return
+	}
 	if err := ssh.ValidateParams(host, user, port); err != nil {
 		util.SendJSON(w, 200, map[string]any{"error": err.Error()}, nil)
 		return
@@ -203,6 +211,10 @@ func (h *Handler) handleSSHLs(w http.ResponseWriter, body map[string]any, r *htt
 		util.SendJSON(w, 200, map[string]any{"error": "Connection not found"}, nil)
 		return
 	}
+	if conn.Kind == "shells" {
+		h.shellsForward(w, conn, "/api/ls", map[string]any{"path": remotePath}, map[string]any{"folders": []string{}})
+		return
+	}
 
 	folders, err := h.sshMgr.ListRemote(connID, conn.Host, conn.User, conn.Port, remotePath)
 	if err != nil {
@@ -239,6 +251,10 @@ func (h *Handler) handleSSHWhich(w http.ResponseWriter, body map[string]any, r *
 	conn := h.sshMgr.FindByID(connID)
 	if conn == nil {
 		util.SendJSON(w, 200, map[string]any{"error": "Connection not found"}, nil)
+		return
+	}
+	if conn.Kind == "shells" {
+		h.shellsForward(w, conn, "/api/which", map[string]any{"q": q}, map[string]any{"matches": []string{}})
 		return
 	}
 

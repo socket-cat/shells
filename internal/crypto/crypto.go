@@ -154,8 +154,10 @@ func generateFingerprint(pub []byte) string {
 
 // ---- HMAC proofs ----
 
-func hmacSHA256(msg []byte) []byte {
-	mac := hmac.New(sha256.New, secretHash)
+func hmacSHA256(msg []byte) []byte { return macWith(secretHash, msg) }
+
+func macWith(key, msg []byte) []byte {
+	mac := hmac.New(sha256.New, key)
 	mac.Write(msg)
 	return mac.Sum(nil)
 }
@@ -183,10 +185,10 @@ func VerifyHMACProof(msg []byte, proofB64 string) bool {
 
 // ---- per-connection crypto state ----
 
-// State holds the per-WebSocket crypto context.
+// State holds the per-WebSocket crypto context, for either end.
 type State struct {
-	sendAEAD     cipher.AEAD // s2c (server encrypts)
-	recvAEAD     cipher.AEAD // c2s (server decrypts)
+	sendAEAD     cipher.AEAD // s2c on the server, c2s on a client
+	recvAEAD     cipher.AEAD // c2s on the server, s2c on a client
 	apiKey       []byte
 	clientPub    []byte // 65-byte SEC1 point
 	challenge    string // hex challenge string for proof-response
@@ -227,18 +229,10 @@ func HandleInitCrypto(s *State, clientPubB64 string) (map[string]any, error) {
 		return nil, fmt.Errorf("ecdh failed: %w", err)
 	}
 
-	// keyContext = SHA-256(serverPub || clientPub)  [matches browser]
-	h := sha256.New()
-	h.Write(serverPubSEC1)
-	h.Write(clientPub)
-	var ctx [32]byte
-	copy(ctx[:], h.Sum(nil))
-
-	salt := secretHash
-	s.sendAEAD, _ = newGCM(hkdf(shared, salt, concatInfo(labelS2C, ctx[:]), keyLen)) // server sends with s2c
-	s.recvAEAD, _ = newGCM(hkdf(shared, salt, concatInfo(labelC2S, ctx[:]), keyLen)) // server receives c2s
-	apiRaw := hkdf(shared, salt, concatInfo(labelAPI, ctx[:]), keyLen)
-	s.apiKey = apiRaw
+	c2s, s2c, api := sessionKeys(shared, secretHash, serverPubSEC1, clientPub)
+	s.sendAEAD, _ = newGCM(s2c) // server sends with s2c
+	s.recvAEAD, _ = newGCM(c2s) // server receives c2s
+	s.apiKey = api
 	s.clientPub = clientPub
 
 	// challenge
@@ -373,6 +367,19 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
+}
+
+// sessionKeys derives the keys both ends share: HKDF over the ECDH secret,
+// salted with the secret hash, bound to keyContext = SHA-256(serverPub ||
+// clientPub) [matches browser].
+func sessionKeys(shared, secretHash, serverPub, clientPub []byte) (c2s, s2c, api []byte) {
+	h := sha256.New()
+	h.Write(serverPub)
+	h.Write(clientPub)
+	ctx := h.Sum(nil)
+	return hkdf(shared, secretHash, concatInfo(labelC2S, ctx), keyLen),
+		hkdf(shared, secretHash, concatInfo(labelS2C, ctx), keyLen),
+		hkdf(shared, secretHash, concatInfo(labelAPI, ctx), keyLen)
 }
 
 func concatInfo(label, ctx []byte) []byte {
