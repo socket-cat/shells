@@ -25,27 +25,31 @@ const execCols, execRows = 200, 50
 // A gate runs before a command and holds it until the client is attached:
 // the remote destroys a session the moment its process exits, so a quick
 // command would be gone, output and exit status with it, before `attach`
-// arrives. The marker, split by an empty quoted string so the command text
-// never contains it, says the gate is up; head waits for the line the client
-// sends once attached; stty -echo keeps that line off the screen. The
-// command goes through eval, so the outer shell parses only the gate: a
-// command it cannot parse fails after the gate, error and status intact.
-// Plain external commands, ';', eval and single quotes only, so it parses in
-// sh, bash, zsh and fish (fish alone reads a backslash inside single quotes
-// as an escape).
+// arrives. head waits for the line the client sends right behind `attach`;
+// the remote handles one connection's frames in order, so it is attached
+// before that line reaches the PTY (no round trip spent waiting). The
+// marker, split by an empty quoted string so the command text never
+// contains it, follows that line: it lands behind everything the remote
+// sends while attaching (replay, mode restore), so what comes after it is
+// the command's. The command goes through eval, so the outer shell parses
+// only the gate: a command it cannot parse fails after the gate, error and
+// status intact. Plain external commands, ';', eval and single quotes only,
+// so it parses in sh, bash, zsh and fish (fish alone reads a backslash
+// inside single quotes as an escape).
 //
 // execGate also keeps echo off (stdin piped in is not echoed back) and drops
 // the CR the PTY puts before each LF; connectGate gives the terminal back.
 const (
-	execGate    = "stty -echo -onlcr; echo shells-gate''-%s; head -n 1 >/dev/null; eval '%s'"
-	connectGate = "stty -echo; echo shells-gate''-%s; head -n 1 >/dev/null; stty echo; eval '%s'"
+	execGate    = "stty -echo -onlcr; head -n 1 >/dev/null; printf shells-go''-%[1]s; eval '%[2]s'"
+	connectGate = "stty -echo; head -n 1 >/dev/null; stty echo; printf shells-go''-%[1]s; eval '%[2]s'"
 )
 
+// gated wraps cmd in gate; marker is the nonce its marker carries.
 func gated(gate, cmd string) (command, marker string) {
 	var n [8]byte
 	_, _ = rand.Read(n[:])
-	nonce := hex.EncodeToString(n[:])
-	return fmt.Sprintf(gate, nonce, strings.ReplaceAll(cmd, "'", `'\''`)), "shells-gate-" + nonce
+	marker = hex.EncodeToString(n[:])
+	return fmt.Sprintf(gate, marker, strings.ReplaceAll(cmd, "'", `'\''`)), marker
 }
 
 // exitIdle is how long the client keeps reading after the exit frame, and
@@ -67,7 +71,7 @@ func Run(keysDir, id, cmd string, stdin io.Reader, stdout io.Writer, sigs <-chan
 	if err != nil {
 		return 0, err
 	}
-	c, err := connect(r)
+	c, err := connect(r, true)
 	if err != nil {
 		return 0, err
 	}
@@ -89,7 +93,7 @@ func Open(keysDir, id string, cols, rows int, cwd, command string) (sid, marker 
 	if err != nil {
 		return "", "", err
 	}
-	c, err := connect(r)
+	c, err := connect(r, true)
 	if err != nil {
 		return "", "", err
 	}
@@ -174,12 +178,16 @@ func (c *client) relay(sid, marker string, in io.Reader, out io.Writer, sigs <-c
 		return 0, err
 	}
 
-	var pre []byte // output before the gate opens: the marker, attach noise
-	gated, ready := marker == "", false
+	var pre []byte // output before the command: attach replay, the marker
+	start := []byte("shells-go-" + marker)
+	gated := marker == ""
 	var gateTimeout <-chan time.Time
 	if gated {
 		go c.pump(sidBuf, in, tty)
 	} else {
+		if err := c.data(sidBuf, []byte("\n")); err != nil {
+			return 0, err
+		}
 		gateTimeout = time.After(replyTimeout)
 	}
 	code, haveCode := 0, false
@@ -238,8 +246,6 @@ func (c *client) relay(sid, marker string, in io.Reader, out io.Writer, sigs <-c
 					continue
 				}
 				switch m.Type {
-				case "ready":
-					ready = true
 				case "exit":
 					code, haveCode = exitCode(m.ExitCode, m.Signal), true
 					grace = time.After(exitIdle)
@@ -249,11 +255,14 @@ func (c *client) relay(sid, marker string, in io.Reader, out io.Writer, sigs <-c
 					}
 				}
 			}
-			if !gated && ready && bytes.Contains(pre, []byte(marker)) {
-				gated, pre, gateTimeout = true, nil, nil
-				if err := c.data(sidBuf, []byte("\n")); err != nil {
+			if i := bytes.Index(pre, start); !gated && i >= 0 {
+				gated, gateTimeout = true, nil
+				if _, err := out.Write(pre[i+len(start):]); errors.Is(err, syscall.EPIPE) {
+					return 128 + int(syscall.SIGPIPE), nil
+				} else if err != nil {
 					return 0, err
 				}
+				pre = nil
 				go c.pump(sidBuf, in, tty)
 			}
 		}
@@ -296,7 +305,7 @@ func (c *client) deleteSession(sid string) {
 	if _, err := c.call("/api/sessions/"+sid, del); err == nil {
 		return
 	}
-	if c2, err := connect(c.r); err == nil {
+	if c2, err := connect(c.r, true); err == nil {
 		_, _ = c2.call("/api/sessions/"+sid, del)
 		c2.close()
 	}

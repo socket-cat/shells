@@ -5,6 +5,7 @@ package federate
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"shells/internal/crypto"
@@ -44,6 +46,9 @@ type client struct {
 	state *crypto.State
 	token string
 	http  *http.Client
+
+	mu    sync.Mutex
+	early chan net.Conn // the API's TLS connection, dialed beside the socket; taken once
 }
 
 // ack is the remote's crypto-ack.
@@ -52,8 +57,10 @@ type ack struct {
 }
 
 // dial opens the socket and sends init-crypto; the caller checks the ack's
-// identity before finish. learn is tlsConfig's (setup only).
-func dial(r *remote, learn *string) (*client, *ack, error) {
+// identity before finish. learn is tlsConfig's (setup only). api opens the
+// HTTP client's TLS connection while the socket's handshake runs (2 round
+// trips saved), with the same TLS check.
+func dial(r *remote, learn *string, api bool) (*client, *ack, error) {
 	u, err := url.Parse(r.URL)
 	if err != nil {
 		return nil, nil, err
@@ -76,13 +83,26 @@ func dial(r *remote, learn *string) (*client, *ack, error) {
 	if r.GUC != "" {
 		c.header.Set("Cookie", "GUC="+r.GUC)
 	}
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: replyTimeout}, "tcp", net.JoinHostPort(u.Hostname(), port), c.tls)
+	addr := net.JoinHostPort(u.Hostname(), port)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: replyTimeout}, "tcp", addr, c.tls)
 	if err != nil {
 		return nil, nil, err
+	}
+	if api {
+		early := make(chan net.Conn, 1)
+		c.early = early
+		go func() {
+			if conn, err := tls.DialWithDialer(&net.Dialer{Timeout: replyTimeout}, "tcp", addr, c.tls); err == nil {
+				early <- conn
+			} else {
+				early <- nil
+			}
+		}()
 	}
 	c.ws, err = websocket.Client(conn, &url.URL{Scheme: "wss", Host: u.Host, Path: "/ws"}, c.header)
 	if err != nil {
 		conn.Close()
+		c.dropEarly()
 		return nil, nil, err
 	}
 	c.ws.OnMessage = func(p []byte, _ bool) { c.in <- p }
@@ -109,9 +129,10 @@ func dial(r *remote, learn *string) (*client, *ack, error) {
 }
 
 // connect dials a remote added before: identity and salt must match the pins
-// in r, then the stored hash finishes the handshake.
-func connect(r *remote) (*client, error) {
-	c, a, err := dial(r, nil)
+// in r, then the stored hash finishes the handshake. api: the caller will
+// make /api calls (dial's early connection).
+func connect(r *remote, api bool) (*client, error) {
+	c, a, err := dial(r, nil, api)
 	if relayRefused(err) && r.GUC != "" {
 		return nil, errors.New("socket.cat refused this server's pairing (unused for 7 days, or revoked): add the connection again in the picker")
 	}
@@ -161,7 +182,7 @@ func (c *client) finish(a *ack, secretHash []byte) error {
 	c.token = m.SessionToken
 	c.http = &http.Client{
 		Timeout:       replyTimeout,
-		Transport:     &http.Transport{TLSClientConfig: c.tls},
+		Transport:     &http.Transport{DialTLSContext: c.dialAPI},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return nil
@@ -178,6 +199,47 @@ func (c *client) recv(timeout time.Duration) ([]byte, error) {
 		return p, nil
 	case <-t.C:
 		return nil, errors.New("the remote did not answer")
+	}
+}
+
+// dialAPI gives the HTTP client dial's early connection the first time,
+// then dials its own; both pass c.tls.
+func (c *client) dialAPI(ctx context.Context, network, addr string) (net.Conn, error) {
+	if early := c.takeEarly(); early != nil {
+		if conn := <-early; conn != nil {
+			return conn, nil
+		}
+	}
+	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: replyTimeout}, Config: c.tls}
+	return d.DialContext(ctx, network, addr)
+}
+
+func (c *client) takeEarly() chan net.Conn {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	early := c.early
+	c.early = nil
+	return early
+}
+
+// dropEarly closes the early connection when nothing took it.
+func (c *client) dropEarly() {
+	if early := c.takeEarly(); early != nil {
+		go func() {
+			if conn := <-early; conn != nil {
+				conn.Close()
+			}
+		}()
+	}
+}
+
+// gone reports whether the socket has closed (the remote revoked the token).
+func (c *client) gone() bool {
+	select {
+	case <-c.ws.Done():
+		return true
+	default:
+		return false
 	}
 }
 
@@ -227,19 +289,106 @@ type APIError struct{ Path, Msg, Code string }
 
 func (e *APIError) Error() string { return e.Path + ": " + e.Msg }
 
-// Call is one encrypted /api request to the remote id over a connection of
-// its own, for the ls / which / paste forwards.
+// poolIdle is how long Call keeps a remote's authenticated client after its
+// last request: the picker's ls / which run in bursts, and a reused client
+// costs one round trip instead of a socket, a handshake and a TLS dial (8).
+// The remote's token lives as long as the socket, within this window.
+const poolIdle = 30 * time.Second
+
+var pool = struct {
+	sync.Mutex
+	m map[string]*pooled
+}{m: map[string]*pooled{}}
+
+type pooled struct {
+	c    *client
+	busy int
+	idle *time.Timer
+}
+
+// Call is one encrypted /api request to the remote id, for the ls / which /
+// paste forwards and session deletes, over a client kept for poolIdle. The
+// credential is read every time, so a re-setup or a removed connection
+// never reuses the old one.
 func Call(keysDir, id, path string, body map[string]any) (map[string]any, error) {
 	r, err := load(keysDir, id)
 	if err != nil {
+		drop(id, nil)
 		return nil, err
 	}
-	c, err := connect(r)
+	p, err := take(id, r)
 	if err != nil {
 		return nil, err
 	}
-	defer c.close()
-	return c.call(path, body)
+	out, err := p.c.call(path, body)
+	var apiErr *APIError
+	if err != nil && !errors.As(err, &apiErr) {
+		drop(id, p) // a transport failure: the next Call starts afresh
+	}
+	pool.Lock()
+	p.busy--
+	pool.Unlock()
+	return out, err
+}
+
+// take returns id's pooled client for r, marked busy, connecting a new one
+// when there is none, it is closed, or r changed.
+func take(id string, r *remote) (*pooled, error) {
+	pool.Lock()
+	p := pool.m[id]
+	if p != nil && *p.c.r == *r && !p.c.gone() {
+		p.busy++
+		p.idle.Reset(poolIdle)
+		pool.Unlock()
+		return p, nil
+	}
+	pool.Unlock()
+	drop(id, p)
+	c, err := connect(r, true)
+	if err != nil {
+		return nil, err
+	}
+	p = &pooled{c: c, busy: 1}
+	p.idle = time.AfterFunc(poolIdle, func() { expire(id, p) })
+	pool.Lock()
+	old := pool.m[id]
+	pool.m[id] = p
+	pool.Unlock()
+	if old != nil && old.busy == 0 {
+		old.idle.Stop()
+		go old.c.close()
+	}
+	return p, nil
+}
+
+// expire closes an idle pooled client; a busy one gets another window.
+func expire(id string, p *pooled) {
+	pool.Lock()
+	if p.busy > 0 {
+		p.idle.Reset(poolIdle)
+		pool.Unlock()
+		return
+	}
+	if pool.m[id] == p {
+		delete(pool.m, id)
+	}
+	pool.Unlock()
+	p.c.close()
+}
+
+// drop removes id's pooled client (p, or whichever is there when p is nil)
+// and closes it.
+func drop(id string, p *pooled) {
+	pool.Lock()
+	cur := pool.m[id]
+	if cur == nil || (p != nil && cur != p) {
+		pool.Unlock()
+		return
+	}
+	delete(pool.m, id)
+	pool.Unlock()
+	cur.idle.Stop()
+	go cur.c.close()
 }
 
 // call is one encrypted /api request (always POST, the verb in _method, like
@@ -297,6 +446,7 @@ func (c *client) call(path string, body map[string]any) (map[string]any, error) 
 // close ends the socket (the remote revokes the token with it) and waits,
 // bounded, for the close frame to go out.
 func (c *client) close() {
+	c.dropEarly()
 	c.ws.Close(1000, "")
 	select {
 	case <-c.ws.Done():

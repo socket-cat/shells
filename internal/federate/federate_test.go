@@ -7,9 +7,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -212,5 +215,60 @@ func TestNormalizeURL(t *testing.T) {
 		if err := federate.Setup(t.TempDir(), bad, "https://127.0.0.1:1", []byte("s")); err == nil || !strings.Contains(err.Error(), "invalid connection id") {
 			t.Errorf("Setup with id %q: %v", bad, err)
 		}
+	}
+}
+
+// TestCallReusesClient: picker calls in a burst share one authenticated
+// client (no new socket or TLS connection after the first), and a removed
+// connection is never served from the pool.
+func TestCallReusesClient(t *testing.T) {
+	rm := fedtest.Start(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var dials atomic.Int32
+	go func() {
+		for {
+			a, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			b, err := net.Dial("tcp", strings.TrimPrefix(rm.URL, "https://"))
+			if err != nil {
+				a.Close()
+				continue
+			}
+			go io.Copy(a, b)
+			go io.Copy(b, a)
+		}
+	}()
+	keys := filepath.Join(rm.Dir, "ssh-keys")
+	if err := federate.Setup(keys, id, "https://"+ln.Addr().String(), []byte(fedtest.Secret)); err != nil {
+		t.Fatal(err)
+	}
+	ls := func() error {
+		_, err := federate.Call(keys, id, "/api/ls", map[string]any{"path": rm.Dir})
+		return err
+	}
+	if err := ls(); err != nil {
+		t.Fatal(err)
+	}
+	n := dials.Load()
+	for range 3 {
+		if err := ls(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d := dials.Load() - n; d != 0 {
+		t.Errorf("%d new connections for pooled calls", d)
+	}
+	if err := os.Remove(filepath.Join(keys, id+".shells")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ls(); err == nil {
+		t.Error("a removed connection was served from the pool")
 	}
 }

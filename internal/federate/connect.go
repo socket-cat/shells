@@ -21,7 +21,7 @@ func connectTTY(keysDir, id, sid, marker string, sigs <-chan os.Signal) (int, er
 	if err != nil {
 		return 0, err
 	}
-	c, err := connect(r)
+	c, err := connect(r, sid == "") // a new session: open is an /api call
 	if err != nil {
 		return 0, err
 	}

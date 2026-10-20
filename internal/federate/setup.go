@@ -33,7 +33,7 @@ func Probe(rawURL string) error {
 		return err
 	}
 	var pin string
-	c, _, err := dial(r, &pin)
+	c, _, err := dial(r, &pin, false)
 	if relayRefused(err) && r.GUC != "" {
 		forgetPairing(r.URL)
 		_, err = relaySession(r.URL)
@@ -58,7 +58,7 @@ func Setup(keysDir, id, rawURL string, secret []byte) error {
 		return err
 	}
 	var pin string
-	c, a, err := dial(r, &pin)
+	c, a, err := dial(r, &pin, false)
 	if err != nil {
 		return err
 	}
