@@ -112,7 +112,7 @@ Go stdlib backend; vanilla JS + xterm.js frontend, embedded at build time.
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[AGPL-3.0](LICENSE). Provided as is, without warranty or support.
 
 ---
 

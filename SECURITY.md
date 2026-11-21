@@ -1,48 +1,28 @@
-# Security Policy
+# Security
 
-Shells — persistent web terminal / SSH gateway. Pure Go stdlib server,
-AGPL-3.0-or-later. Shipped as static binaries for Linux, macOS, FreeBSD
-(amd64/arm64) via GitHub releases and socket.cat.
+Shells is free software published by one developer in their spare time,
+under AGPL-3.0-or-later. It is provided **as is, with no warranty and no
+support**: see sections 15 and 16 of the [LICENSE](LICENSE). There is no
+support contract, no response time and no promise that any issue will be
+fixed.
 
-## Supported versions
+## Versions
 
-Only the **latest tagged release** is supported.
-
-Security-support window: each minor version receives security fixes until the
-next minor ships, plus **90 days** after that ship date. Patch releases within
-a minor carry the same fixes; there is no backport stream to older minors.
+Fixes, when there are any, go into the latest release only. Older versions
+are never patched.
 
 ## Reporting a vulnerability
 
-**Private channel only:** GitHub private vulnerability reporting —
+Use GitHub's private report form —
 <https://github.com/socket-cat/shells/security/advisories/new> (Security tab →
-"Report a vulnerability"). Do **not** open a public issue for a security
-report.
+"Report a vulnerability") — so details stay out of public issues. Reports
+are read when time allows; no acknowledgement or fix date is promised.
 
-Targets: **72 h** to a triage acknowledgement, **14 days** to a fix for
-exploitable vulnerabilities. If a fix slips, you get a status update at the
-14-day mark, not silence.
+## You run it, you secure it
 
-## Handling process
-
-1. **Register** — the report becomes an `NC-*` entry in the project's
-   nonconformity register (internal dev workspace; closed findings are kept,
-   never deleted).
-2. **Fix behind a test** — behavior changes ship with a test that fails on the
-   vulnerable code.
-3. **Security-review the diff** — crypto/TLS, auth, input parsing, file paths,
-   network listeners go through a security review of the change diff only.
-4. **Coordinated disclosure** — the fix ships in the next release; the release
-   notes credit the reporter and describe the vulnerability after the fixed
-   binaries are published.
-
-## Scope
-
-Covers the **shipped binaries** (GitHub releases + socket.cat). Self-hosted
-operators own their deployment controls — TLS termination, reverse proxy,
-firewall allow-list, secret hygiene — the standard vendor-supplies-code /
-operator-runs-environment split. Hardening checklist for operators:
-`README.md` "Get started".
+Shells gives whoever holds the secret a shell on your machine. Where you
+expose it, who gets the secret and how the host is protected are your
+decisions and your responsibility.
 
 ## Security model (by design, not vulnerabilities)
 
@@ -62,10 +42,3 @@ and already has a shell as the server user. Consequently:
 - **Secrets in memory** — key material is zeroed where Go allows it. Copies
   held inside the Go standard library (e.g. TLS/AES state) cannot be zeroed.
   This is a platform limitation.
-
-## Cyber Resilience Act
-
-Manufacturer duties under Regulation (EU) 2024/2847 are addressed from the
-next release (v-next); the readiness inventory is maintained in the project's
-private dev workspace. Vulnerability reporting to ENISA/CSIRT per Art. 14
-applies when a vulnerability in the distributed product is actively exploited.
