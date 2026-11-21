@@ -27,14 +27,17 @@ SHELLS_SECRET=your-secret ./shells
 
 <p align="center"><img src="docs/demo.gif" alt="Shells demo — desktop and mobile" width="920"></p>
 
-Open `http://localhost:2222` — the browser asks for the E2E secret; enter the
-same `SHELLS_SECRET` you just set. From another machine (or Docker by IP) set
-`SHELLS_HOST=0.0.0.0` and open `<host>:2222`: it moves to HTTPS (self-signed;
-accept the warning once) — browsers only allow the encryption over HTTPS or
-localhost. For a trusted certificate (no warning, installable PWA) put it
-behind a reverse proxy with TLS. Prebuilt for Linux, macOS and FreeBSD (amd64
-+ arm64); [releases](https://github.com/socket-cat/shells/releases/latest)
-have checksums and direct links.
+Open `http://localhost:2222` and enter the `SHELLS_SECRET` you just set.
+
+- **From another machine or Docker:** start it with `SHELLS_HOST=0.0.0.0` and
+  open `<host>:2222`. It switches to HTTPS on its own; accept the self-signed
+  certificate once.
+- **No certificate warning, installable PWA:** put it behind a reverse proxy
+  with TLS.
+
+Prebuilt for Linux, macOS and FreeBSD (amd64 + arm64);
+[releases](https://github.com/socket-cat/shells/releases/latest) have
+checksums and direct links.
 
 ## Why
 
@@ -58,11 +61,11 @@ have checksums and direct links.
 
 ## Reach another shells
 
-For a box you can reach only through its shells app (its sshd closed): in
-the new-session picker type its `https://host[:port]` where you would type
-`user@host`, then its secret. It joins your connections like an SSH host —
-folder and command pickers, sessions in this UI — and the CLI resolves the
-same list by label (the remote's hostname) or host, like `ssh host`:
+One shells can open sessions on another, with no SSH between them. In the
+new-session picker type the other one's `https://host[:port]` where you
+would type `user@host`, then its secret. From then on it works like an SSH
+host: its folders, commands and sessions in this UI. From a terminal, call
+it by its hostname:
 
 ```bash
 shells exec dev-box -- 'cd /srv/x && git status'   # exit code kept
@@ -70,18 +73,9 @@ shells connect dev-box                             # interactive
 ```
 
 The remote needs only HTTPS: its own (on by default once `SHELLS_HOST` is
-not loopback) or a TLS proxy. Its identity key is pinned on first use, and
-so is its TLS certificate when the system roots do not vouch for it
-(self-signed); a CA-signed one is checked against the roots on every
-connection. Only a hash of the secret is stored, 0600 beside the SSH keys. `exec` keeps stdout and stderr apart and passes stdin
-byte for byte, like `ssh host cmd`; a remote older than this version runs
-it in a PTY instead (streams merged, text stdin only). In the background
-give it `</dev/null`: a stopped `exec` (Ctrl-Z, or `&` reading the
-terminal) stops answering the remote, which may end it after a minute. A
-socket.cat relay name (`https://<app>.<relay>.socket.cat`) pairs through a
-code you approve in your socket.cat account, once socket.cat supports
-pairing; until then use the box's own address or its blind `union.cat`
-name.
+not loopback) or a TLS proxy. Its identity is pinned on first use, and only
+a hash of its secret is stored. `exec` keeps stdout and stderr apart and
+passes stdin byte for byte, like `ssh host cmd`.
 
 ## Configure
 
