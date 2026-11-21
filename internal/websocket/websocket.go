@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -48,8 +49,19 @@ const MaxPayload = 1024 * 1024
 
 // readDeadline caps idle time between frames. Server pings every 30 s
 // (keepalive); browser auto-pongs, which readFrame sees and resets the
-// deadline. 60 s is 2× the keepalive interval, giving ample margin.
+// deadline. 60 s is 2× the keepalive interval, giving ample margin. It runs
+// only while readLoop waits for a frame: an OnMessage blocked by
+// backpressure (pipe exec's stdin) is not idleness.
 const readDeadline = 60 * time.Second
+
+// After a CloseDrain frame (RFC 6455 §7.1.1) readLoop drains the peer until
+// its close frame or EOF: each read may wait lingerIdle, all of them
+// lingerMax. A live peer still sending (stdin behind a command that ended)
+// renews the wait until it has read our close frame and answers it.
+const (
+	lingerIdle = 5 * time.Second
+	lingerMax  = 30 * time.Second
+)
 
 // maxPendingPongs caps pong frames queued-but-not-yet-written per connection.
 // Pings are keepalives: a client flooding pings gets at most this many pongs
@@ -149,7 +161,8 @@ func Client(conn net.Conn, u *url.URL, header http.Header) (*Conn, error) {
 	if err := req.Write(conn); err != nil {
 		return nil, fmt.Errorf("websocket: write handshake: %w", err)
 	}
-	br := bufio.NewReader(conn)
+	lr := &io.LimitedReader{R: conn, N: maxHandshakeResponse} // the response is the peer's to size
+	br := bufio.NewReader(lr)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
 		return nil, fmt.Errorf("websocket: read handshake: %w", err)
@@ -164,14 +177,19 @@ func Client(conn net.Conn, u *url.URL, header http.Header) (*Conn, error) {
 		return nil, errors.New("websocket: bad handshake response")
 	}
 	_ = conn.SetDeadline(time.Time{})
+	lr.N = math.MaxInt64
 
 	c := newConn(conn, br)
 	c.client = true
 	return c, nil
 }
 
-// clientHandshakeTimeout bounds Client's request/response exchange.
-const clientHandshakeTimeout = 15 * time.Second
+// clientHandshakeTimeout bounds Client's request/response exchange, and
+// maxHandshakeResponse the bytes it reads for the 101 response.
+const (
+	clientHandshakeTimeout = 15 * time.Second
+	maxHandshakeResponse   = 64 << 10
+)
 
 func computeAccept(key string) string {
 	h := sha1.New()
@@ -227,6 +245,10 @@ type Conn struct {
 	// must not be (RFC 6455 §5.1).
 	client bool
 
+	peerClosed atomic.Bool  // the peer's close frame came: ours is the echo
+	drain      atomic.Bool  // CloseDrain: half-close behind our close frame
+	lingerEnd  atomic.Int64 // unix nanos, set once our close frame is out (halfClose)
+
 	// Public callbacks — set by the caller before Start.
 	OnMessage func(payload []byte, isBinary bool)
 	OnClose   func(code int, reason string)
@@ -262,11 +284,31 @@ func setNoDelay(c net.Conn) {
 // but not yet written to the socket (mirrors ws.bufferedAmount in the JS app).
 func (c *Conn) BufferedAmount() int64 { return c.buffered.Load() }
 
+// WaitDrain returns at once while at most high bytes are queued; past high it
+// waits until fewer than low are, false if the connection ends first.
+// ponytail: a 5 ms poll, not a signal from writeLoop: past high a sender
+// moves at most (high-low)/5ms (~90 MB/s at WSHWM/WSLWM); add a drain cond to
+// writeLoop if a link ever beats that.
+func (c *Conn) WaitDrain(high, low int64) bool {
+	if c.buffered.Load() <= high {
+		return true
+	}
+	t := time.NewTicker(5 * time.Millisecond)
+	defer t.Stop()
+	for c.buffered.Load() >= low {
+		select {
+		case <-c.done:
+			return false
+		case <-t.C:
+		}
+	}
+	return true
+}
+
 // Start launches the read and write loops. It blocks until the connection
 // closes; run it in a goroutine.
 func (c *Conn) Start() {
 	go c.writeLoop()
-	_ = c.conn.SetReadDeadline(time.Now().Add(readDeadline))
 	c.readLoop()
 }
 
@@ -327,6 +369,17 @@ func (c *Conn) Close(code int, reason string) {
 	})
 }
 
+// CloseDrain is Close for a close that follows output the peer still has to
+// read (a pipe exec's exit): the socket half-closes and drains the peer's
+// input until it answers (halfClose), instead of closing on unread input,
+// which resets TCP and drops what the peer had not read yet. Every other
+// close (a refusal, pre-auth above all) terminates at once, so a peer
+// cannot hold a socket open by staying silent.
+func (c *Conn) CloseDrain(code int, reason string) {
+	c.drain.Store(true)
+	c.Close(code, reason)
+}
+
 // closeSendWait bounds how long teardown may wait for a queued close frame
 // to be written (RFC 6455 §5.5.1 clean-close etiquette). A hostile or dead
 // peer therefore delays TCP teardown by at most this long.
@@ -360,10 +413,35 @@ func (c *Conn) writeLoop() {
 			c.buffered.Add(-payloadLenOf(f))
 		}
 		if shutdown {
-			c.terminate()
+			if c.drain.Load() && !c.peerClosed.Load() && !c.closed.Load() {
+				c.halfClose()
+			} else {
+				c.terminate()
+			}
 			return
 		}
 	}
+}
+
+// halfClose follows a CloseDrain frame: no more writes (TLS close_notify,
+// then the TCP FIN behind everything queued) while readLoop keeps reading,
+// so the socket is never closed on unread input: that turns the close into
+// a TCP reset, and the peer's kernel drops what it had not read yet (the
+// tail of a command's output, its exit).
+func (c *Conn) halfClose() {
+	nc := c.conn
+	if tc, ok := nc.(interface{ NetConn() net.Conn }); ok {
+		if cw, ok := nc.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+		nc = tc.NetConn()
+	}
+	if cw, ok := nc.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+	end := time.Now().Add(lingerMax)
+	c.lingerEnd.Store(end.UnixNano())
+	_ = c.conn.SetReadDeadline(time.Now().Add(lingerIdle))
 }
 
 // signalCloseSent marks the queued close frame as written (or permanently
@@ -400,18 +478,25 @@ func (c *Conn) readLoop() {
 	var fragOp byte
 
 	for {
+		d := time.Now().Add(readDeadline)
+		if end := c.lingerEnd.Load(); end != 0 {
+			if d = time.Now().Add(lingerIdle); d.After(time.Unix(0, end)) {
+				d = time.Unix(0, end)
+			}
+		}
+		_ = c.conn.SetReadDeadline(d)
 		_, payload, op, fin, err := readFrame(c.br, c.client)
 		if err != nil {
 			c.handleClose(-1, "")
 			return
 		}
-		_ = c.conn.SetReadDeadline(time.Now().Add(readDeadline))
 		switch op {
 		case OpPing:
 			c.handlePing(payload)
 		case OpPong:
 			// keepalive ack
 		case OpClose:
+			c.peerClosed.Store(true)
 			code, reason := parseClose(payload)
 			c.Close(code, reason)
 			c.handleClose(code, reason)
@@ -431,7 +516,7 @@ func (c *Conn) readLoop() {
 			}
 			if fin {
 				c.deliver(fragBuf, fragOp == OpBinary)
-				fragBuf = fragBuf[:0]
+				fragBuf = nil // OnMessage may keep the slice (federate queues it)
 			}
 		default:
 			c.handleClose(1002, "unsupported opcode")
@@ -441,7 +526,7 @@ func (c *Conn) readLoop() {
 }
 
 func (c *Conn) deliver(payload []byte, isBinary bool) {
-	if c.OnMessage != nil {
+	if c.OnMessage != nil && !c.closeQueued.Load() { // after our close, input is only drained
 		c.OnMessage(payload, isBinary)
 	}
 }

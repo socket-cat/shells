@@ -20,6 +20,7 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -71,7 +72,18 @@ func Run() {
 	logf := makeLogger(logPath)
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sigCh, stopSignals()...)
+
+	// pause sits between attempts, when no child runs: a stop signal there
+	// ends the supervisor at once.
+	pause := func() {
+		select {
+		case <-sigCh:
+			logf("stop requested")
+			os.Exit(0)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 
 	crashes := 0
 	startFails := 0
@@ -86,14 +98,15 @@ func Run() {
 				rollback(binary, logf)
 				startFails = 0
 			}
-			time.Sleep(500 * time.Millisecond)
+			pause()
 			continue
 		}
 		startFails = 0
 		logf("started %s (pid %d)", binary, child.Process.Pid)
 
-		rc := waitOrSignal(child, sigCh)
-		if rc == -1 { // signal received: stop cleanly — must exit, NOT fall
+		started := time.Now()
+		rc, stop := waitOrSignal(child, sigCh)
+		if stop { // signal received: stop cleanly — must exit, NOT fall
 			// through to the server code below in main().
 			logf("stop requested")
 			_ = child.Process.Signal(syscall.SIGTERM)
@@ -127,7 +140,7 @@ func Run() {
 		case 0:
 			crashes = 0
 		default:
-			crashes++
+			crashes = crashCount(crashes, time.Since(started))
 			logf("crash %d/%d", crashes, crashLimit)
 			if crashes >= crashLimit && fileExists(binary+".previous") {
 				rollback(binary, logf)
@@ -135,8 +148,20 @@ func Run() {
 			}
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		pause()
 	}
+}
+
+// healthyRun is how long a child must have served for its crash to start
+// the count over: crashes spaced by good service never add up to a rollback.
+const healthyRun = 60 * time.Second
+
+// crashCount is the crash counter after a crash of a child that ran for ran.
+func crashCount(crashes int, ran time.Duration) int {
+	if ran >= healthyRun {
+		crashes = 0
+	}
+	return crashes + 1
 }
 
 // startChild launches the server child: same env minus the child marker, with
@@ -179,22 +204,61 @@ func childEnv(binary string) []string {
 	return append(env, "SHELLS_SELFUPDATE_CHILD=1", "SHELLS_BINARY_PATH="+binary)
 }
 
-// waitOrSignal returns the child's exit code, or -1 if a TERM/INT signal
-// arrived first.
-func waitOrSignal(child *exec.Cmd, sigCh chan os.Signal) int {
+// stopSignals stop the supervisor and, through it, the child: TERM, INT
+// and HUP (a closed terminal), unless the launch ignored HUP (nohup): then
+// it stays ignored, and the child inherits that.
+func stopSignals() []os.Signal {
+	s := []os.Signal{syscall.SIGTERM, syscall.SIGINT}
+	if !signal.Ignored(syscall.SIGHUP) {
+		s = append(s, syscall.SIGHUP)
+	}
+	return s
+}
+
+// stopGrace is how long a child killed by TERM/INT/HUP waits for that stop
+// to reach the supervisor too: a group stop (Ctrl+C, a closed terminal,
+// systemd) can kill a child still starting up before our own signal handler
+// has queued the signal.
+// ponytail: a timing bound; a supervisor descheduled longer than this counts
+// that stop as a crash (upgrade: none short of signalfd, which is Linux-only).
+const stopGrace = 200 * time.Millisecond
+
+// waitOrSignal waits for the child. stop: a stop signal reached the
+// supervisor; it wins over a child exit that raced it. Otherwise rc is the
+// child's exit code, 1 when a signal killed it that the supervisor did not
+// receive (OOM, kill -9, a stray TERM): a crash, not a stop.
+func waitOrSignal(child *exec.Cmd, sigCh chan os.Signal) (rc int, stop bool) {
 	done := make(chan error, 1)
 	go func() { done <- child.Wait() }()
 	select {
 	case <-sigCh:
-		return -1
+		return 0, true
 	case err := <-done:
-		if err == nil {
-			return 0
+		select {
+		case <-sigCh:
+			return 0, true
+		default:
 		}
-		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode()
+		var ee *exec.ExitError
+		switch {
+		case err == nil:
+			return 0, false
+		case errors.As(err, &ee) && ee.ExitCode() >= 0:
+			return ee.ExitCode(), false
 		}
-		return -1
+		if ee != nil {
+			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				switch ws.Signal() {
+				case syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP:
+					select {
+					case <-sigCh:
+						return 0, true
+					case <-time.After(stopGrace):
+					}
+				}
+			}
+		}
+		return 1, false
 	}
 }
 
@@ -266,7 +330,9 @@ func preflight(newBin string, testPort int, logPath string) bool {
 
 	scheme := "http"
 	client := &http.Client{Timeout: 2 * time.Second}
-	if tlsEnabled() {
+	// Resolved exactly as the staged child does (it inherits this env): a
+	// probe on another scheme would fail every update and roll back forever.
+	if config.TLSOn() {
 		scheme = "https"
 		// Loopback-only preflight against the staged binary's self-signed
 		// cert, so certificate verification is intentionally skipped.
@@ -356,15 +422,6 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
-}
-
-// tlsEnabled reports whether the supervisor's own environment has SHELLS_TLS
-// on. It must parse identically to the child's parser (config.EnvTrue), since
-// the env is inherited by the staged child: if the preflight probe guessed a
-// different scheme than the staged child's listener, every update would fail
-// preflight and roll back forever.
-func tlsEnabled() bool {
-	return config.EnvTrue(os.Getenv("SHELLS_TLS"))
 }
 
 func fileExists(p string) bool {

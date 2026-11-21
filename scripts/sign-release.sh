@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Sign a release checksums file with the offline Ed25519 key and emit the raw
+# Sign a release checksums file with the Ed25519 signing key and emit the raw
 # 64-byte signature to <checksums>.sig — the artifact hosted on socket.cat.
 #
 # Usage:
 #   scripts/sign-release.sh <version> [checksums.txt] [output.sig]
 #
 # The key is NEVER read from the environment in CI. This runs on the signer's
-# offline machine:
-#   SHELLS_SIGNING_KEY=/path/to/signing-primary.key ./scripts/sign-release.sh 1.2.46
+# machine, outside CI, with the release tag v<version> in the local repo and
+# SHELLS_SIGN_COMMIT the full SHA of the release commit you reviewed:
+#   SHELLS_SIGNING_KEY=/path/to/signing-primary.key SHELLS_SIGN_COMMIT=<sha> \
+#     ./scripts/sign-release.sh 1.2.46
 #
 # Set -x to a git commit hash to make signing deterministic if desired; the
 # server only verifies the signature, so a random nonce is also fine.
@@ -30,7 +32,7 @@ abspath() {
   esac
 }
 if [ -z "$KEY" ]; then
-  echo "error: SHELLS_SIGNING_KEY not set (path to the offline ed25519 private key)" >&2
+  echo "error: SHELLS_SIGNING_KEY not set (path to the ed25519 private key)" >&2
   exit 1
 fi
 CHECKSUMS=$(abspath "$CHECKSUMS")
@@ -73,6 +75,55 @@ digest() {
     shasum -a 256 "$1"
   fi
 }
+
+# --- Rebuild check: sign only what the reviewed commit builds to ----------
+# Pin first, before anything from the tag runs: v<version> must point at
+# SHELLS_SIGN_COMMIT, the commit the signer reviewed, and that commit must
+# already be in the local main (a commit only fetched with the tag is
+# refused). Then rebuild the six targets from it in a clean clone and refuse
+# unless checksums.txt's binary lines are exactly the rebuild's: binaries
+# not built from the reviewed commit are never signed. The rebuild runs that
+# commit's scripts/build.sh (go generate included) on this machine as this
+# user, in a fixed Go environment: no user go env or workspace, the public
+# proxy and checksum db, the commit's go.mod toolchain. Runs before the SBOM
+# lines below are folded in.
+COMMIT="${SHELLS_SIGN_COMMIT:-}"
+case "$COMMIT" in
+  *[!0-9a-f]*) COMMIT="" ;;
+esac
+[ "${#COMMIT}" -eq 40 ] || {
+  echo "error: set SHELLS_SIGN_COMMIT to the full SHA of the release commit you reviewed" >&2
+  exit 1
+}
+tagged=$(git rev-parse -q --verify "refs/tags/v${VERSION}^{commit}") || {
+  echo "error: no local tag v${VERSION}" >&2
+  exit 1
+}
+[ "$tagged" = "$COMMIT" ] || {
+  echo "error: v${VERSION} is ${tagged}, not the reviewed ${COMMIT}: refusing to sign" >&2
+  exit 1
+}
+git merge-base --is-ancestor "$COMMIT" refs/heads/main || {
+  echo "error: ${COMMIT} is not in the local main: refusing to sign" >&2
+  exit 1
+}
+build="$(mktemp -d)"
+trap 'rm -rf "$build"' EXIT
+git clone -q --shared . "$build/src"
+git -C "$build/src" -c advice.detachedHead=false checkout -q "$COMMIT"
+mkdir "$build/out"
+for pair in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 freebsd/amd64 freebsd/arm64; do
+  env -i HOME="$HOME" PATH="$PATH" GO="${GO:-go}" GOENV=off GOFLAGS= GOWORK=off \
+    GOTOOLCHAIN=auto GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+    GOOS="${pair%/*}" GOARCH="${pair#*/}" \
+    "$build/src/scripts/build.sh" "$build/out/shells-${pair%/*}-${pair#*/}" >/dev/null
+done
+if ! diff <(grep -v '^#' "$CHECKSUMS" | grep -v '\.spdx\.json$' | sort -k2) \
+  <( (cd "$build/out" && for f in shells-*; do digest "$f"; done) | sort -k2) >&2; then
+  echo "error: $CHECKSUMS does not match a rebuild of v${VERSION}: refusing to sign" >&2
+  exit 1
+fi
+rm -rf "$build"
 
 if [ "${SHELLS_SIGN_NO_SBOM:-0}" = "1" ]; then
   echo "note: SHELLS_SIGN_NO_SBOM=1 — signing WITHOUT SBOM coverage" >&2

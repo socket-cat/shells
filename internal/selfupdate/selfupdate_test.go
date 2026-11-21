@@ -9,10 +9,14 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"shells/internal/config"
 )
@@ -120,21 +124,6 @@ func TestVerifyStaged(t *testing.T) {
 	}
 }
 
-func TestEnvInt(t *testing.T) {
-	os.Setenv("SUP_X", "7")
-	if config.EnvInt("SUP_X", 3) != 7 {
-		t.Error("envInt should read the env value")
-	}
-	os.Setenv("SUP_X", "junk")
-	if config.EnvInt("SUP_X", 3) != 3 {
-		t.Error("envInt should fall back on non-numeric input")
-	}
-	os.Unsetenv("SUP_X")
-	if config.EnvInt("SUP_X", 3) != 3 {
-		t.Error("envInt should use the default when unset")
-	}
-}
-
 // TestMain doubles as a fake "staged server" for TestPreflightFreePort and
 // TestPreflightOverridesShellsPort: when re-executed with PREFLIGHT_HELPER=1
 // it only answers /api/health on its resolved port, matching config.Load.
@@ -228,5 +217,93 @@ func TestPreflightRejectsForeignServer(t *testing.T) {
 	// /bin/true exits at once: only the foreign server is left answering.
 	if preflight("/bin/true", l.Addr().(*net.TCPAddr).Port, "") {
 		t.Fatal("pre-flight accepted a foreign server's 200 as the staged binary")
+	}
+}
+
+// TestWaitOrSignal: a child killed by a signal the supervisor did not
+// forward (OOM, kill -9, a stray TERM) is a crash, rc 1, so restart and
+// rollback apply; exit codes pass through; a stop signal at the supervisor
+// wins.
+func TestWaitOrSignal(t *testing.T) {
+	for _, c := range []struct {
+		cmd string
+		rc  int
+	}{
+		{"exit 0", 0},
+		{"exit 5", 5},
+		{"kill -KILL $$", 1},
+		{"kill -TERM $$", 1},
+	} {
+		child := exec.Command("sh", "-c", c.cmd)
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if rc, stop := waitOrSignal(child, make(chan os.Signal, 1)); rc != c.rc || stop {
+			t.Errorf("%s: rc=%d stop=%v, want rc=%d stop=false", c.cmd, rc, stop, c.rc)
+		}
+	}
+	sig := make(chan os.Signal, 1)
+	sig <- syscall.SIGTERM
+	child := exec.Command("sh", "-c", "exit 0")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, stop := waitOrSignal(child, sig); !stop {
+		t.Error("a stop signal at the supervisor did not stop it")
+	}
+	// A group stop that kills the child before our handler has queued it:
+	// the stop arrives late, within stopGrace, and still counts as a stop.
+	late := make(chan os.Signal, 1)
+	child = exec.Command("sh", "-c", "kill -TERM $$")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(50*time.Millisecond, func() { late <- syscall.SIGTERM })
+	if rc, stop := waitOrSignal(child, late); !stop {
+		t.Errorf("a group stop that reached the supervisor late was a crash (rc=%d)", rc)
+	}
+}
+
+// TestCrashCount: crashes spaced by healthy service never add up to the
+// rollback limit; quick ones do.
+func TestCrashCount(t *testing.T) {
+	n := 0
+	for range 3 {
+		n = crashCount(n, 2*healthyRun)
+	}
+	if n != 1 {
+		t.Errorf("three crashes after healthy runs counted %d, want 1", n)
+	}
+	n = 0
+	for range 3 {
+		n = crashCount(n, time.Second)
+	}
+	if n != 3 {
+		t.Errorf("three quick crashes counted %d, want 3", n)
+	}
+}
+
+// TestStopSignals: HUP stops the supervisor like TERM, unless the launch
+// ignored it (nohup), which then stays ignored.
+func TestStopSignals(t *testing.T) {
+	has := func() bool {
+		for _, s := range stopSignals() {
+			if s == syscall.SIGHUP {
+				return true
+			}
+		}
+		return false
+	}
+	if !has() {
+		t.Error("SIGHUP is not a stop signal")
+	}
+	signal.Ignore(syscall.SIGHUP)
+	defer func() { // Reset keeps the ignored bit; Notify clears it
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGHUP)
+		signal.Stop(c)
+	}()
+	if has() {
+		t.Error("SIGHUP caught although the launch ignored it (nohup)")
 	}
 }

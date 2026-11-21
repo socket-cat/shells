@@ -180,7 +180,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   },
 
   async promptCreate() {
-    await this._fetchRecentBackends();
+    await Promise.all([this._fetchRecentBackends(), this._sshLoad]);
 
     const updateCheckRow = document.createElement('label');
     updateCheckRow.className = 'tui-dialog-footer-extra-check';
@@ -417,6 +417,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
                   : setupData.code === 'wrong_secret' ? 'The secret was incorrect.'
                   : setupData.code === 'timeout' ? 'The connection timed out.'
                   : setupData.code === 'install_failed' ? 'The server rejected key installation.'
+                  : setupData.code === 'windows' ? 'An sshd inside WSL also works.'
                   : '';
                 const errBody = createFingerprintDialogBody(
                   `Failed to set up ${what} for ${label}\n\n` +

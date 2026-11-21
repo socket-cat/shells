@@ -492,3 +492,30 @@ func TestParseBackendShellsKind(t *testing.T) {
 		}
 	}
 }
+
+// TestSSHConnectionDeleteNeedsDELETE: only DELETE removes a connection;
+// another method on the same path is not routed to the delete.
+func TestSSHConnectionDeleteNeedsDELETE(t *testing.T) {
+	cfg := apiTestConfig(t)
+	keyDir := t.TempDir()
+	cfg.SSHAvailable = true
+	cfg.SSHKeysDir = keyDir
+	cfg.SSHConnectionsFile = filepath.Join(keyDir, "ssh-connections.json")
+	sshMgr := ssh.NewManager(cfg)
+	const id = "0b7a3c52-5d1e-4f6a-9c3b-2e8d7f1a4b60"
+	if err := sshMgr.Add(ssh.Connection{ID: id, Host: "example.invalid", User: "u", Port: 22}); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{cfg: cfg, sshMgr: sshMgr, rateLimiter: util.NewRateLimiter()}
+	r := httptest.NewRequest(http.MethodPost, "/api/ssh-connections/"+id, nil)
+	for _, m := range []string{"", "POST", "GET", "PUT"} {
+		h.route(httptest.NewRecorder(), r, map[string]any{"_method": m})
+		if sshMgr.FindByID(id) == nil {
+			t.Fatalf("method %q deleted the connection", m)
+		}
+	}
+	h.route(httptest.NewRecorder(), r, map[string]any{"_method": "DELETE"})
+	if sshMgr.FindByID(id) != nil {
+		t.Fatal("DELETE kept the connection")
+	}
+}

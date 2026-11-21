@@ -20,8 +20,8 @@ type pinnedKey struct {
 	pub         ed25519.PublicKey
 }
 
-// pinnedKeys are the offline-held signing keys (primary + backup). Private
-// keys never live in CI; rotation is a documented manual procedure.
+// pinnedKeys are the release signing keys (primary + backup). Private keys
+// never live in CI; rotation is a documented manual procedure.
 var pinnedKeys = []pinnedKey{
 	{
 		fingerprint: "d6615b9e858ed590",

@@ -177,6 +177,9 @@ func (h *Handler) handleSSHSetup(w http.ResponseWriter, body map[string]any, r *
 	if err != nil {
 		var se *ssh.SetupError
 		if errors.As(err, &se) {
+			if se.Code == "install_failed" && ssh.IsWindows(host, port) {
+				se = &ssh.SetupError{Code: "windows", Msg: ssh.WindowsShellHint}
+			}
 			util.SendJSON(w, 200, map[string]any{"error": se.Msg, "code": se.Code}, nil)
 		} else {
 			util.SendJSON(w, 200, map[string]any{"error": "SSH setup failed", "code": "unknown"}, nil)
@@ -186,6 +189,10 @@ func (h *Handler) handleSSHSetup(w http.ResponseWriter, body map[string]any, r *
 
 	hostname, ok := h.sshMgr.ProbeWithKey(connID, host, user, port)
 	if !ok {
+		if ssh.IsWindows(host, port) {
+			util.SendJSON(w, 200, map[string]any{"error": ssh.WindowsAdminKeyHint, "code": "windows"}, nil)
+			return
+		}
 		util.SendJSON(w, 200, map[string]any{"error": "Key installed but verification failed", "code": "verify_failed"}, nil)
 		return
 	}

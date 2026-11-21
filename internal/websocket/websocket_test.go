@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -116,6 +117,8 @@ func TestPingFloodCapped(t *testing.T) {
 // quiescent peer the queued close frame cannot possibly be delivered early.
 // If a regression reintroduces teardown-before-flush, the pipe closes under
 // the writer and the read below fails with EOF instead of seeing the frame.
+// A plain Close (a refusal, pre-auth above all) then terminates at once: a
+// silent peer cannot hold the socket.
 func TestCloseFlushBeforeTCPExit(t *testing.T) {
 	c, peer, _ := newTestConn(t)
 	go c.writeLoop()
@@ -129,8 +132,106 @@ func TestCloseFlushBeforeTCPExit(t *testing.T) {
 	if op := readOneFrameOp(t, peer); op != OpClose {
 		t.Fatalf("first flushed frame op = %#x, want close (%#x)", op, OpClose)
 	}
-	if !waitFor(func() bool { return c.closed.Load() }, 2*time.Second) {
+	if !waitFor(func() bool { return c.closed.Load() }, 100*time.Millisecond) {
 		t.Fatal("connection did not terminate after the close frame was flushed")
+	}
+}
+
+// TestCloseDrainWaitsForPeer: after a CloseDrain frame the socket stays
+// open, input drained and not delivered, until the peer answers (RFC 6455
+// §7.1.1): closing on unread input would reset TCP and drop what the peer
+// had not read yet.
+func TestCloseDrainWaitsForPeer(t *testing.T) {
+	peer, server := net.Pipe()
+	defer peer.Close()
+	c := newConn(server, bufio.NewReader(server))
+	var delivered atomic.Int32
+	c.OnMessage = func([]byte, bool) { delivered.Add(1) }
+	go c.Start()
+
+	c.CloseDrain(1000, "bye")
+	time.Sleep(100 * time.Millisecond)
+	if op := readOneFrameOp(t, peer); op != OpClose {
+		t.Fatalf("first flushed frame op = %#x, want close (%#x)", op, OpClose)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if c.closed.Load() {
+		t.Fatal("closed before the peer answered the close")
+	}
+	if _, err := peer.Write(encodeFrame([]byte("late"), OpBinary, true)); err != nil {
+		t.Fatal("input after our close was not read:", err)
+	}
+	if _, err := peer.Write(encodeFrame([]byte{0x03, 0xe8}, OpClose, true)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(func() bool { return c.closed.Load() }, 2*time.Second) {
+		t.Fatal("connection did not terminate after the peer's close")
+	}
+	if n := delivered.Load(); n != 0 {
+		t.Fatalf("%d messages delivered after our close", n)
+	}
+}
+
+// TestFragmentedNotAliased: a fragmented message is handed over in a slice
+// of its own; OnMessage may keep it (federate queues it) while the next one
+// arrives.
+func TestFragmentedNotAliased(t *testing.T) {
+	peer, server := net.Pipe()
+	defer peer.Close()
+	c := newConn(server, bufio.NewReader(server))
+	got := make(chan []byte, 2)
+	c.OnMessage = func(p []byte, _ bool) { got <- p }
+	go c.Start()
+	defer c.Close(1000, "")
+	for _, b := range []string{"AAAA", "BBBB"} {
+		first := encodeFrame([]byte(b), OpBinary, true)
+		first[0] &^= 0x80 // FIN off: more fragments follow
+		if _, err := peer.Write(append(first, encodeFrame([]byte(b), OpContinuation, true)...)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b := <-got, <-got
+	if string(a) != "AAAAAAAA" || string(b) != "BBBBBBBB" {
+		t.Fatalf("messages = %q, %q", a, b)
+	}
+}
+
+// TestClientBoundedHandshake: a peer that streams an endless 101 response
+// is refused once maxHandshakeResponse is read, not after the timeout with
+// all of it in memory.
+func TestClientBoundedHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		s, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer s.Close()
+		line := []byte("X-Pad: " + strings.Repeat("a", 1000) + "\r\n")
+		if _, err := s.Write([]byte("HTTP/1.1 101 Switching Protocols\r\n")); err != nil {
+			return
+		}
+		for {
+			if _, err := s.Write(line); err != nil {
+				return
+			}
+		}
+	}()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	start := time.Now()
+	if _, err := Client(conn, &url.URL{Scheme: "ws", Host: ln.Addr().String(), Path: "/ws"}, http.Header{}); err == nil {
+		t.Fatal("an endless 101 response was accepted")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("refused after %v: the response was read unbounded", d)
 	}
 }
 

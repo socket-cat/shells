@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -38,7 +39,7 @@ func (m *Manager) SetupShells(rawURL string, secret []byte) (*Connection, error)
 	}
 	var out bytes.Buffer
 	hostname := ""
-	if code, err := federate.Run(m.cfg.SSHKeysDir, id, "hostname -s", nil, &out, nil); err == nil && code == 0 {
+	if code, err := federate.Run(m.cfg.SSHKeysDir, id, "hostname -s", nil, &out, io.Discard, nil); err == nil && code == 0 {
 		if h := strings.TrimSpace(out.String()); util.ValidHostname(h) {
 			hostname = h
 		}

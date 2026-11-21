@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +96,46 @@ func TestClientHandshake(t *testing.T) {
 		}
 		if got, err := Decrypt(dir.to, frame[1:]); err != nil || string(got) != "hi" {
 			t.Fatalf("decrypt = %q, %v", got, err)
+		}
+	}
+}
+
+// TestClientRefusesChosenChallenge: Finish answers the challenge with
+// HMAC(secretHash, challenge), and secretHash is also HKDF's salt, so the
+// session PRK is HMAC(secretHash, sharedSecret). Only the shape every server
+// sends (16 random bytes, lowercase hex) is answered: a chosen value, such as
+// a 32-byte ECDH secret, never is.
+func TestClientRefusesChosenChallenge(t *testing.T) {
+	salt := []byte("0123456789abcdef")
+	if err := Init([]byte("holahola"), salt, filepath.Join(t.TempDir(), "server-key")); err != nil {
+		t.Fatal(err)
+	}
+	hs, err := NewClientHandshake()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack, err := HandleInitCrypto(NewState(), hs.PublicKeyB64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := SecretHash([]byte("holahola"), salt)
+	finish := func(challenge string) error {
+		_, _, _, err := hs.Finish(ack["publicKey"].(string), ack["authProof"].(string), challenge, hash)
+		return err
+	}
+	if err := finish(ack["authChallenge"].(string)); err != nil {
+		t.Fatalf("the server's own challenge: %v", err)
+	}
+	for _, c := range []string{
+		"",
+		strings.Repeat("a", 31),
+		strings.Repeat("a", 33),
+		strings.Repeat("A", 32),
+		strings.Repeat("g", 32),
+		string(bytes.Repeat([]byte{0x41, 0xc3, 0xa9, 0x00}, 8)), // 32 bytes, not hex: an ECDH secret's shape
+	} {
+		if err := finish(c); err == nil {
+			t.Errorf("Finish answered challenge %q", c)
 		}
 	}
 }

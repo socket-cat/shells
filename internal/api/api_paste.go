@@ -6,9 +6,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,10 +37,99 @@ type pasteRecord struct {
 }
 
 var (
-	pasteMu         sync.Mutex
-	sessionPastes   = make(map[string][]pasteRecord) // sessionID -> []pasteRecord
-	pasteHTTPClient = &http.Client{Timeout: 10 * time.Second}
+	pasteMu       sync.Mutex
+	sessionPastes = make(map[string][]pasteRecord) // sessionID -> []pasteRecord
+	// pasteHTTPClient fetches pasted image URLs, which come from copied web
+	// content: straight to the internet (no proxy, no kept connections),
+	// and every dial, redirects included, refused to a non-public address,
+	// so a pasted page cannot make the host GET its own services, its LAN
+	// or the cloud metadata endpoint.
+	pasteHTTPClient = &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			DialContext:       (&net.Dialer{Timeout: 10 * time.Second, Control: publicOnly}).DialContext,
+			DisableKeepAlives: true,
+		},
+	}
+	errPrivateHost = errors.New("prohibited image url host")
+	// Special-purpose ranges the public-unicast test passes: this network,
+	// shared (CGNAT), IETF protocol, benchmarking, reserved, SIIT-translated
+	// IPv4, Teredo, and local-use NAT64, whose operator-chosen layout hides
+	// where its IPv4 sits.
+	blockedNets = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("192.0.0.0/24"),
+		netip.MustParsePrefix("198.18.0.0/15"),
+		netip.MustParsePrefix("240.0.0.0/4"),
+		netip.MustParsePrefix("::ffff:0:0:0/96"),
+		netip.MustParsePrefix("2001::/32"),
+		netip.MustParsePrefix("64:ff9b:1::/48"),
+	}
+	// Well-known NAT64 and 6to4 carry an IPv4 destination at a fixed place:
+	// that one is checked, since an IPv6-only host behind DNS64 reaches
+	// every IPv4 site through 64:ff9b::/96.
+	nat64     = netip.MustParsePrefix("64:ff9b::/96")
+	sixToFour = netip.MustParsePrefix("2002::/16")
 )
+
+// publicOnly refuses a dial to an address publicIP rejects; it sees the
+// resolved IP. Fails closed when the interfaces cannot be read.
+func publicOnly(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return err
+	}
+	local, err := net.InterfaceAddrs()
+	if err != nil || !publicIP(ip, local) {
+		return errPrivateHost
+	}
+	return nil
+}
+
+// publicIP reports whether a pasted image may be fetched from ip: public
+// unicast, outside blockedNets, and outside every on-link prefix in local
+// (this host's interface addresses), so neither the host's own public
+// address, delivered locally past its ingress firewall, nor a LAN or IPv6
+// /64 neighbour is reachable. An IPv6 address narrower than /64 (a DHCPv6
+// /128) counts as its /64: the neighbours share that link.
+// ponytail: on-link prefixes only; a LAN subnet behind a router on a public
+// range still passes (upgrade: consult the routing table).
+func publicIP(ip netip.Addr, local []net.Addr) bool {
+	ip = ip.Unmap()
+	b := ip.As16()
+	switch {
+	case nat64.Contains(ip):
+		ip = netip.AddrFrom4([4]byte(b[12:]))
+	case sixToFour.Contains(ip):
+		ip = netip.AddrFrom4([4]byte(b[2:6]))
+	}
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return false
+	}
+	for _, p := range blockedNets {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	for _, a := range local {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ones, bits := n.Mask.Size(); bits == 128 && ones > 64 {
+			n = &net.IPNet{IP: n.IP, Mask: net.CIDRMask(64, 128)}
+		}
+		if n.Contains(ip.AsSlice()) {
+			return false
+		}
+	}
+	return true
+}
 
 // pasteDir returns the per-OS-user directory /tmp/s-<uid> for pasted images.
 func pasteDir() string {
@@ -98,11 +190,6 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 			util.SendJSON(w, 200, map[string]any{"error": "invalid image url scheme"}, nil)
 			return
 		}
-		// SSRF safeguard: prevent fetching cloud instance metadata
-		if strings.Contains(imgURL, "169.254.") || strings.Contains(imgURL, "metadata.google") {
-			util.SendJSON(w, 200, map[string]any{"error": "prohibited image url host"}, nil)
-			return
-		}
 		req, reqErr := http.NewRequestWithContext(r.Context(), "GET", imgURL, nil)
 		if reqErr != nil {
 			util.SendJSON(w, 200, map[string]any{"error": "invalid image url"}, nil)
@@ -110,6 +197,10 @@ func (h *Handler) handlePasteImage(w http.ResponseWriter, r *http.Request, body 
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 shells/image-paste")
 		resp, fetchErr := pasteHTTPClient.Do(req)
+		if errors.Is(fetchErr, errPrivateHost) {
+			util.SendJSON(w, 200, map[string]any{"error": errPrivateHost.Error()}, nil)
+			return
+		}
 		if fetchErr != nil {
 			util.SendJSON(w, 200, map[string]any{"error": "failed to download image"}, nil)
 			return
@@ -332,20 +423,6 @@ func (h *Handler) cleanupSessionPastes(sessionID string) {
 		} else {
 			_ = os.Remove(rec.path)
 		}
-	}
-}
-
-// CleanupSessionPastes removes all local image files uploaded during the given session.
-func CleanupSessionPastes(sessionID string) {
-	pasteMu.Lock()
-	defer pasteMu.Unlock()
-	records, ok := sessionPastes[sessionID]
-	if !ok {
-		return
-	}
-	delete(sessionPastes, sessionID)
-	for _, rec := range records {
-		_ = os.Remove(rec.path)
 	}
 }
 

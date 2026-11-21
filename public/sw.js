@@ -58,7 +58,6 @@ const STATIC_ASSETS = [
   '/js/switcher.js',
   '/js/mobile.js',
   '/js/keyboard-picker.js',
-  '/js/telemetry.js',
   '/js/input.js',
   '/vendor/xterm.js',
   '/vendor/xterm-addon-fit.js',

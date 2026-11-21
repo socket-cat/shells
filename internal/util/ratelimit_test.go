@@ -58,3 +58,19 @@ func TestRateLimiterSweepsStaleEntries(t *testing.T) {
 		t.Fatal("admitted attempt not recorded")
 	}
 }
+
+// A sweep run by a short-window caller keeps a longer window's history:
+// update-apply's 2/hour must not reset whenever a 1/minute limit sweeps.
+func TestRateLimiterSweepKeepsLongerWindows(t *testing.T) {
+	rl := NewRateLimiter()
+	now := time.Now()
+	if !rl.Allow("hourly", 1, time.Hour) {
+		t.Fatal("first hourly attempt rejected")
+	}
+	rl.limits["hourly"] = []time.Time{now.Add(-10 * time.Minute)}
+	rl.lastSweep = now.Add(-2 * time.Minute)
+	rl.Allow("minutely", 30, time.Minute)
+	if rl.Allow("hourly", 1, time.Hour) {
+		t.Fatal("the hourly limit was reset by a minute-window sweep")
+	}
+}

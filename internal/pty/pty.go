@@ -15,8 +15,20 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
+
+// pendingMax bounds the output kept for a first OnData subscriber that comes
+// after the child has started writing (a Linux PTY itself holds ~17 KB for a
+// parent that is not reading yet).
+// ponytail: output beyond it before that subscription is dropped; a reader
+// that only starts at the first OnData would hold it in the kernel instead.
+const pendingMax = 64 << 10
+
+// drainWait bounds how long the exit waits for the reader to drain the
+// child's last output.
+const drainWait = time.Second
 
 type dataListener struct {
 	id uint64
@@ -38,6 +50,10 @@ type Term struct {
 	nextID        uint64
 	dataListeners []dataListener
 	exitListeners []exitListener
+	pending       []byte // output read while no OnData subscriber existed
+	exited        bool   // dispatchExit ran; exitCode/exitSignal are final
+	exitCode      int
+	exitSignal    string
 
 	closeOnce sync.Once
 }
@@ -102,8 +118,23 @@ func Spawn(name string, args, env []string, dir string, cols, rows int) (*Term, 
 	go func() {
 		err := cmd.Wait()
 		exitCode, signal := extractExit(err)
+		// Let the reader drain what the child wrote last: it ends on EIO once
+		// nothing holds the slave. Closing the master first would not
+		// interrupt its blocking Read (openPty calls Fd), only fail the next
+		// one and drop that output.
+		// ponytail: a background job that outlives the child keeps the slave
+		// open, so no EIO comes: one in its own session (setsid) or ignoring
+		// SIGHUP (trap '' HUP, nohup, or a server started with SIGHUP
+		// ignored, where every `cmd &` does). The exit goes out after
+		// drainWait anyway, one more chunk of that job's output may trail it,
+		// the rest is dropped, and the reader stays blocked until the job
+		// lets go. A nonblocking master (no Fd side effect) would let Close
+		// end the reader at once.
+		select {
+		case <-readDone:
+		case <-time.After(drainWait):
+		}
 		t.closeMaster()
-		<-readDone // drain remaining output before notifying exit
 		t.dispatchExit(exitCode, signal)
 	}()
 
@@ -162,10 +193,19 @@ func (t *Term) Kill() error {
 	return nil
 }
 
-// OnData subscribes to PTY output. The returned function unsubscribes.
+// OnData subscribes to PTY output. The returned function unsubscribes. Output
+// read while there was no subscriber is handed to fn first, on the caller's
+// goroutine, before fn joins the live dispatch.
 func (t *Term) OnData(fn func([]byte)) (cancel func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for len(t.dataListeners) == 0 && len(t.pending) > 0 {
+		p := t.pending
+		t.pending = nil
+		t.mu.Unlock()
+		fn(p)
+		t.mu.Lock()
+	}
 	t.nextID++
 	id := t.nextID
 	t.dataListeners = append(t.dataListeners, dataListener{id, fn})
@@ -182,9 +222,14 @@ func (t *Term) OnData(fn func([]byte)) (cancel func()) {
 }
 
 // OnExit subscribes to process termination. The returned function unsubscribes.
+// If the process has already exited, fn still runs, on its own goroutine.
 func (t *Term) OnExit(fn func(exitCode int, signal string)) (cancel func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.exited {
+		go fn(t.exitCode, t.exitSignal)
+		return func() {}
+	}
 	t.nextID++
 	id := t.nextID
 	t.exitListeners = append(t.exitListeners, exitListener{id, fn})
@@ -202,6 +247,11 @@ func (t *Term) OnExit(fn func(exitCode int, signal string)) (cancel func()) {
 
 func (t *Term) dispatchData(data []byte) {
 	t.mu.Lock()
+	if len(t.dataListeners) == 0 {
+		t.pending = append(t.pending, data[:min(len(data), pendingMax-len(t.pending))]...)
+		t.mu.Unlock()
+		return
+	}
 	cbs := make([]func([]byte), len(t.dataListeners))
 	for i, l := range t.dataListeners {
 		cbs[i] = l.fn
@@ -214,6 +264,7 @@ func (t *Term) dispatchData(data []byte) {
 
 func (t *Term) dispatchExit(code int, signal string) {
 	t.mu.Lock()
+	t.exited, t.exitCode, t.exitSignal = true, code, signal
 	cbs := make([]func(int, string), len(t.exitListeners))
 	for i, l := range t.exitListeners {
 		cbs[i] = l.fn

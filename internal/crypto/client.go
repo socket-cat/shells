@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"strings"
 )
 
 // ErrServerAuth means the remote's authProof does not match the secret hash:
@@ -59,6 +60,13 @@ func SecretHash(secret, salt []byte) []byte {
 // anything else, derives the session keys and returns a ready State plus the
 // crypto-ready proofs: HMAC(clientPub) and HMAC(challenge).
 func (h *ClientHandshake) Finish(serverPubB64, authProof, challenge string, secretHash []byte) (s *State, clientProof, proofResponse string, err error) {
+	// The answer is HMAC(secretHash, challenge), and secretHash is also the
+	// HKDF salt: the session PRK is HMAC(secretHash, ECDH secret). So only
+	// the shape every server sends (v1.2.0 on: 16 random bytes, lowercase
+	// hex) is answered, never a chosen value such as an ECDH secret.
+	if len(challenge) != 32 || strings.Trim(challenge, "0123456789abcdef") != "" {
+		return nil, "", "", errors.New("invalid server challenge")
+	}
 	serverPub, err := parseServerPub(serverPubB64)
 	if err != nil {
 		return nil, "", "", err

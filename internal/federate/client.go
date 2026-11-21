@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -41,6 +42,7 @@ type client struct {
 	ws     *websocket.Conn
 	in     chan []byte // frames from the remote, in order; closed with the socket
 	reason string      // close reason, readable once in is closed
+	pipe   bool        // the remote runs exec on pipes (caps "pipe" in auth-success)
 
 	hs    *crypto.ClientHandshake
 	state *crypto.State
@@ -55,6 +57,10 @@ type client struct {
 type ack struct {
 	Type, PublicKey, Fingerprint, AuthProof, AuthChallenge, Salt string
 }
+
+// pingEvery keeps the remote's 60 s read deadline fed while our own reader
+// is blocked (a slow stdout holds pipe mode back), when it cannot pong.
+const pingEvery = 20 * time.Second
 
 // dial opens the socket and sends init-crypto; the caller checks the ack's
 // identity before finish. learn is tlsConfig's (setup only). api opens the
@@ -108,6 +114,18 @@ func dial(r *remote, learn *string, api bool) (*client, *ack, error) {
 	c.ws.OnMessage = func(p []byte, _ bool) { c.in <- p }
 	c.ws.OnClose = func(_ int, reason string) { c.reason = reason; close(c.in) }
 	go c.ws.Start()
+	go func() {
+		t := time.NewTicker(pingEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-c.ws.Done():
+				return
+			case <-t.C:
+				c.ws.SendPing(nil)
+			}
+		}
+	}()
 
 	if c.hs, err = crypto.NewClientHandshake(); err != nil {
 		c.close()
@@ -130,8 +148,12 @@ func dial(r *remote, learn *string, api bool) (*client, *ack, error) {
 
 // connect dials a remote added before: identity and salt must match the pins
 // in r, then the stored hash finishes the handshake. api: the caller will
-// make /api calls (dial's early connection).
-func connect(r *remote, api bool) (*client, error) {
+// make /api calls (dial's early connection). exec, when set, goes right
+// behind crypto-ready, before the caps in auth-success are known: a remote
+// with pipe mode runs it (the remote handles a connection's frames in
+// order), one from before ignores the unknown control (v1.2.0–v1.2.7), so no
+// round trip waits for the caps.
+func connect(r *remote, api bool, exec string) (*client, error) {
 	c, a, err := dial(r, nil, api)
 	if relayRefused(err) && r.GUC != "" {
 		return nil, errors.New("socket.cat refused this server's pairing (unused for 7 days, or revoked): add the connection again in the picker")
@@ -148,7 +170,12 @@ func connect(r *remote, api bool) (*client, error) {
 		err = errors.New("the remote's secret changed (new salt): remove the connection and add it again")
 	default:
 		hash, _ := hex.DecodeString(r.SecretHash)
-		err = c.finish(a, hash)
+		if err = c.prove(a, hash); err == nil && exec != "" {
+			err = c.control(map[string]any{"type": "exec", "cmd": exec})
+		}
+		if err == nil {
+			err = c.authSuccess()
+		}
 	}
 	if err != nil {
 		c.close()
@@ -157,9 +184,40 @@ func connect(r *remote, api bool) (*client, error) {
 	return c, nil
 }
 
-// finish proves the secret (crypto-ready) and takes the session token from
-// the encrypted auth-success.
+// finish proves the secret and takes auth-success.
 func (c *client) finish(a *ack, secretHash []byte) error {
+	if err := c.prove(a, secretHash); err != nil {
+		return err
+	}
+	return c.authSuccess()
+}
+
+// authSuccess takes the session token and the caps from the encrypted
+// auth-success.
+func (c *client) authSuccess() error {
+	p, err := c.recv(replyTimeout)
+	if err != nil {
+		return err
+	}
+	typ, plain, err := c.decrypt(p)
+	var m struct {
+		Type, SessionToken string
+		Caps               []string
+	}
+	if err != nil || typ != frameControl || json.Unmarshal(plain, &m) != nil || m.Type != "auth-success" || m.SessionToken == "" {
+		return errors.New("handshake: no auth-success")
+	}
+	c.token, c.pipe = m.SessionToken, slices.Contains(m.Caps, "pipe")
+	c.http = &http.Client{
+		Timeout:       replyTimeout,
+		Transport:     &http.Transport{DialTLSContext: c.dialAPI},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return nil
+}
+
+// prove checks the remote's proof of the secret and sends ours (crypto-ready).
+func (c *client) prove(a *ack, secretHash []byte) error {
 	st, proof, resp, err := c.hs.Finish(a.PublicKey, a.AuthProof, a.AuthChallenge, secretHash)
 	if errors.Is(err, crypto.ErrServerAuth) {
 		return ErrWrongSecret
@@ -170,21 +228,6 @@ func (c *client) finish(a *ack, secretHash []byte) error {
 	c.state = st
 	ready, _ := json.Marshal(map[string]string{"type": "crypto-ready", "authProof": proof, "proofResponse": resp})
 	c.ws.SendText(ready)
-	p, err := c.recv(replyTimeout)
-	if err != nil {
-		return err
-	}
-	typ, plain, err := c.decrypt(p)
-	var m struct{ Type, SessionToken string }
-	if err != nil || typ != frameControl || json.Unmarshal(plain, &m) != nil || m.Type != "auth-success" || m.SessionToken == "" {
-		return errors.New("handshake: no auth-success")
-	}
-	c.token = m.SessionToken
-	c.http = &http.Client{
-		Timeout:       replyTimeout,
-		Transport:     &http.Transport{DialTLSContext: c.dialAPI},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
 	return nil
 }
 
@@ -344,17 +387,22 @@ func take(id string, r *remote) (*pooled, error) {
 	}
 	pool.Unlock()
 	drop(id, p)
-	c, err := connect(r, true)
+	c, err := connect(r, true, "")
 	if err != nil {
 		return nil, err
 	}
+	go func() { // a pooled client reads no frames; the remote's broadcasts would fill c.in and stall the socket
+		for range c.in {
+		}
+	}()
 	p = &pooled{c: c, busy: 1}
 	p.idle = time.AfterFunc(poolIdle, func() { expire(id, p) })
 	pool.Lock()
 	old := pool.m[id]
 	pool.m[id] = p
+	closeOld := old != nil && old.busy == 0
 	pool.Unlock()
-	if old != nil && old.busy == 0 {
+	if closeOld {
 		old.idle.Stop()
 		go old.c.close()
 	}
@@ -433,7 +481,7 @@ func (c *client) call(path string, body map[string]any) (map[string]any, error) 
 	}
 	var out map[string]any
 	_ = json.Unmarshal(data, &out)
-	if msg, _ := out["error"].(string); msg != "" {
+	if msg, _ := out["error"].(string); msg != "" && encrypted { // a plain body is anyone's on the route: only its status counts
 		code, _ := out["code"].(string)
 		return nil, &APIError{path, msg, code}
 	}

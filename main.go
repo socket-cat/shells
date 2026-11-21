@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -125,6 +126,7 @@ func main() {
 	}
 
 	apiH := api.New(cfg, mgr, authStore, sshMgr, brand)
+	apiH.BeforeRestart = wsH.KillPipes
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", wsH)
@@ -242,22 +244,39 @@ func main() {
 	server.Protocols = new(http.Protocols)
 	server.Protocols.SetHTTP1(true)
 
-	// Graceful shutdown.
+	// Graceful shutdown. Pipe execs go first: Shutdown does not wait for
+	// hijacked (WebSocket) connections, and they would outlive the server.
+	shutdownDone := make(chan struct{})
 	go func() {
 		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		stops := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+		if !signal.Ignored(syscall.SIGHUP) {
+			stops = append(stops, syscall.SIGHUP) // its terminal closed; nohup keeps ignoring it
+		}
+		signal.Notify(sigCh, stops...)
 		<-sigCh
 		log.Println("Shutting down...")
+		wsH.KillPipes()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
 		mgr.DestroyAll()
 		crypto.Shutdown()
+		close(shutdownDone)
 	}()
 
 	var serveErr error
 	if cfg.TLS {
-		serveErr = server.ListenAndServeTLS(certFile, keyFile)
+		// One port, both schemes (selftls.Dual): a plain-http proxy is
+		// served as before, a browser gets https.
+		var ln net.Listener
+		tlsCfg.NextProtos = []string{"http/1.1"}
+		tlsCfg.Certificates = make([]tls.Certificate, 1)
+		if tlsCfg.Certificates[0], serveErr = tls.LoadX509KeyPair(certFile, keyFile); serveErr == nil {
+			if ln, serveErr = net.Listen("tcp", addr); serveErr == nil {
+				serveErr = server.Serve(selftls.Dual(ln, tlsCfg))
+			}
+		}
 	} else {
 		serveErr = server.ListenAndServe()
 	}
@@ -268,6 +287,7 @@ func main() {
 		}
 		log.Fatalf("server: %v", serveErr)
 	}
+	<-shutdownDone // ErrServerClosed returns as Shutdown starts: let the cleanup finish
 }
 
 // dropHandshakeEOF drops net/http's "TLS handshake error ...: EOF" lines: a

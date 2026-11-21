@@ -19,6 +19,10 @@ func TestHasAllowedOrigin(t *testing.T) {
 		{"absent origin", "h", "", "", true},
 		{"forwarded host wins", "127.0.0.1:8081", "https://h", "h, proxy", true},
 		{"forwarded host refuses foreign", "h", "https://h", "evil", false},
+		{"ipv6 with port", "[::1]:8443", "https://[::1]:8443", "", true},
+		{"ipv6 default port", "[::1]", "https://[::1]", "", true},
+		{"ipv6 foreign", "[::1]:8443", "https://[::2]:8443", "", false},
+		{"ipv4 foreign", "127.0.0.1:8081", "https://127.0.0.2:8081", "", false},
 	} {
 		r := httptest.NewRequest("GET", "/ws", nil)
 		r.Host = c.host

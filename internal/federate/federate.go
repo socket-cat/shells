@@ -30,7 +30,7 @@ import (
 	"shells/internal/util"
 )
 
-const usage = "usage: shells                               the server, configured by SHELLS_* env (README)\n       shells exec <name> [--] <command>\n       shells connect <name>"
+const usage = "usage: shells                               the server, configured by SHELLS_* env (README)\n       shells exec <name> [--] <command>    in the background: </dev/null (a stopped exec may be ended)\n       shells connect <name>"
 
 // Main runs a client command, like ssh does from a terminal: args[0] is
 // "exec" or "connect", <name> a shells connection of the picker (label,
@@ -47,13 +47,13 @@ func Main(args []string, keysDir string, resolve func(name string) (string, erro
 		if cmd[0] == "--" {
 			cmd = cmd[1:]
 		}
-		if len(cmd) == 0 {
-			break
+		if strings.TrimSpace(strings.Join(cmd, "")) == "" {
+			break // nothing to run: exec would wait forever
 		}
 		var id string
 		if id, err = resolve(args[1]); err == nil {
-			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
-			code, err = Run(keysDir, id, strings.Join(cmd, " "), os.Stdin, os.Stdout, sigs)
+			notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
+			code, err = Run(keysDir, id, strings.Join(cmd, " "), os.Stdin, os.Stdout, os.Stderr, sigs)
 		}
 		return exit(code, err)
 	case args[0] == "connect" && (len(args) == 2 || len(args) == 3 || len(args) == 4):
@@ -69,7 +69,7 @@ func Main(args []string, keysDir string, resolve func(name string) (string, erro
 			}
 		}
 		if err == nil {
-			signal.Notify(sigs, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
+			notify(sigs, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
 			code, err = connectTTY(keysDir, id, sid, marker, sigs)
 		}
 		return exit(code, err)
@@ -80,10 +80,32 @@ func Main(args []string, keysDir string, resolve func(name string) (string, erro
 
 func exit(code int, err error) int {
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "shells:", err)
+		fmt.Fprintln(os.Stderr, "shells:", printable(err.Error()))
 		return 255
 	}
 	return code
+}
+
+// notify is signal.Notify for each of sigs not ignored at start: under
+// nohup (HUP) or a non-interactive `&` (INT) they stay ignored, as ssh's do.
+func notify(c chan<- os.Signal, sigs ...os.Signal) {
+	for _, s := range sigs {
+		if !signal.Ignored(s) {
+			signal.Notify(c, s)
+		}
+	}
+}
+
+// printable drops control characters (C0, DEL, C1) from text a relay or
+// remote may have written (a close reason, a status line), so it cannot
+// drive the terminal it is printed to.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // remote is ssh-keys/<id>.shells: what it takes to reach and authenticate

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"shells/internal/util"
@@ -59,8 +60,12 @@ func compgen() ([]string, error) {
 	// bash -i sources ~/.bashrc, where interactive PATH additions (e.g.
 	// npm-global) live; bash -l (login) skips ~/.bashrc entirely, so compgen
 	// under -l misses user binaries like cline. -i with -c emits no prompt,
-	// and stderr job-control notices are silenced.
+	// and stderr job-control notices are silenced. Its own session, so no
+	// controlling terminal: started as `shells &` from an interactive shell,
+	// bash -i would open that terminal from a background process group and
+	// stop the whole group (server included) with SIGTTIN.
 	cmd := exec.CommandContext(ctx, "bash", "-i", "-c", "compgen -c")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

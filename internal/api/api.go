@@ -49,6 +49,10 @@ type Handler struct {
 	// (keys carry an endpoint prefix + client IP).
 	rateLimiter *util.RateLimiter
 
+	// BeforeRestart runs right before a self-update restart exits (main:
+	// wshandler's KillPipes, so pipe execs do not outlive the process).
+	BeforeRestart func()
+
 	// Self-update check state: single-flight + short cache.
 	updateMu       sync.Mutex
 	updateInFlight bool
@@ -91,8 +95,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/api/health":
 		h.handleHealth(w, r)
-	case path == "/api/errors" && r.Method == http.MethodPost:
-		h.handleErrors(w, r)
 	case strings.HasPrefix(path, "/api/"):
 		h.handleEncrypted(w, r)
 	default:
@@ -107,39 +109,12 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// PWA's post-update check matches in dev exactly as in production.
 		"version":     "v" + h.cfg.Version + os.Getenv("SHELLS_DEV_TAG"),
 		"maxSessions": h.cfg.MaxSessions,
+		"tls":         h.cfg.TLS, // https on this same port: an insecure-context page moves there
 		// The supervisor rejected the last staged update (verification or
 		// pre-flight): the page says so instead of waiting for a version
 		// that will never arrive.
 		"updateRefused": os.Getenv("SHELLS_UPDATE_REFUSED") == "1",
 	}, nil)
-}
-
-func (h *Handler) handleErrors(w http.ResponseWriter, r *http.Request) {
-	if !h.rateAllow("errors-"+h.clientIP(r), 30, time.Minute) {
-		w.WriteHeader(204)
-		return
-	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<12))
-	if err == nil {
-		var v map[string]any
-		if json.Unmarshal(raw, &v) == nil {
-			b, _ := json.Marshal(v)
-			log.Printf("[Client Error] %s", string(b))
-		} else {
-			snippet := string(raw)
-			snippet = strings.Map(func(r rune) rune {
-				if r < 0x20 || r == 0x7f {
-					return ' '
-				}
-				return r
-			}, snippet)
-			if len(snippet) > 100 {
-				snippet = snippet[:100]
-			}
-			log.Printf("[Client Error] Malformed: %s", snippet)
-		}
-	}
-	w.WriteHeader(204)
 }
 
 // --- encrypted endpoints ---
@@ -189,7 +164,7 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request, body map[string]
 		h.handleBranding(w, r, body, method)
 	case path == "/api/ssh-connections":
 		h.handleSSHConnections(w, r, body, method)
-	case strings.HasPrefix(path, "/api/ssh-connections/"):
+	case strings.HasPrefix(path, "/api/ssh-connections/") && method == "DELETE":
 		h.handleSSHConnectionDelete(w, path)
 	case path == "/api/ssh-probe":
 		h.handleSSHProbe(w, body, r)
@@ -313,6 +288,9 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	util.SendJSON(w, 200, map[string]any{"applied": true, "version": version}, map[string]string{"Cache-Control": "no-store"})
 	time.AfterFunc(1500*time.Millisecond, func() {
 		log.Printf("[update] verified v%s staged — restarting to self-update", version)
+		if h.BeforeRestart != nil {
+			h.BeforeRestart()
+		}
 		os.Exit(exitCodeRestart)
 	})
 }

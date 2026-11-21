@@ -78,6 +78,8 @@ type ClientConn struct {
 	attached    map[string]*attachState
 	closed      atomic.Bool
 	lastLockAll time.Time
+
+	pipe atomic.Pointer[pipeProc] // the exec's command (pipe.go); set by readLoop, read by KillPipes too
 }
 
 // Handler owns the WebSocket upgrader and the client registry.
@@ -94,6 +96,13 @@ type Handler struct {
 	// connLimiter bounds new WS connects per IP (see wsConnectsPerIP),
 	// mirroring the api package's per-IP limiters via the shared helper.
 	connLimiter *util.RateLimiter
+
+	pipes    atomic.Int32 // pipe execs running, counted with sessions against MaxSessions
+	stopping atomic.Bool  // KillPipes ran: an exec still starting dies at once
+
+	// NoPipe makes this a remote from before pipe mode (tests): no caps,
+	// exec and pipeSid frames ignored.
+	NoPipe bool
 }
 
 // New creates a WS handler bound to the given config, session manager, and
@@ -288,6 +297,7 @@ func (cc *ClientConn) cleanup() {
 	if !cc.closed.CompareAndSwap(false, true) {
 		return
 	}
+	cc.pipeDrop()
 
 	if cc.token != "" {
 		cc.handler.auth.Revoke(cc.token)
@@ -362,6 +372,10 @@ func (cc *ClientConn) onMessage(payload []byte, isBinary bool) {
 		}
 		sid := bytesToSid(plaintext[:16])
 		data := plaintext[16:]
+		if sid == pipeSid {
+			cc.pipeInput(data)
+			return
+		}
 		s := cc.handler.manager.Get(sid)
 		if s != nil {
 			_, _ = s.TryTermWrite(data) // no-op once destroyed
@@ -421,11 +435,15 @@ func (cc *ClientConn) handlePlaintextControl(msg map[string]any) {
 		}
 		cc.token = token
 
-		inner, _ := json.Marshal(map[string]any{
+		reply := map[string]any{
 			"type":         "auth-success",
 			"sessionToken": token,
 			"sessions":     cc.handler.manager.List(), // saves the client's GET /api/sessions round trip
-		})
+		}
+		if !cc.handler.NoPipe {
+			reply["caps"] = []string{"pipe"} // encrypted: nothing new on the wire before auth
+		}
+		inner, _ := json.Marshal(reply)
 		cc.sendEncrypted(inner, nil)
 
 	default:
@@ -436,6 +454,9 @@ func (cc *ClientConn) handlePlaintextControl(msg map[string]any) {
 func (cc *ClientConn) handleEncryptedControl(msg map[string]any) {
 	msgType, _ := msg["type"].(string)
 	sid, _ := msg["sid"].(string)
+	if sid == pipeSid {
+		return // never a session
+	}
 
 	switch msgType {
 	case "attach":
@@ -477,6 +498,10 @@ func (cc *ClientConn) handleEncryptedControl(msg map[string]any) {
 		cc.mu.Unlock()
 	case "claim-active":
 		cc.handleClaimActive(sid, msg)
+	case "exec":
+		cc.handleExec(msg)
+	case "stdin-eof":
+		cc.pipeEOF(msg)
 	case "lock-all":
 		// Relay the lock signal to every other connected client, rate-limited
 		// per connection so a (legit or compromised) client can't spam the
@@ -735,15 +760,19 @@ func (cc *ClientConn) handleClaimActive(sid string, msg map[string]any) {
 // --- encrypted send ---
 
 func (cc *ClientConn) sendEncrypted(data []byte, sidBuf []byte) {
-	if cc.closed.Load() || !cc.ready.Load() {
-		return
-	}
 	frameType := msgTypeControl
 	if sidBuf != nil {
 		plaintext := make([]byte, 16+len(data))
 		copy(plaintext[:16], sidBuf)
 		copy(plaintext[16:], data)
 		data, frameType = plaintext, msgTypeData
+	}
+	cc.sendFrame(data, frameType)
+}
+
+func (cc *ClientConn) sendFrame(data []byte, frameType byte) {
+	if cc.closed.Load() || !cc.ready.Load() {
+		return
 	}
 	cc.stateMu.RLock()
 	frame, err := crypto.EncryptFrame(cc.state, data, frameType) // errors once Destroy ran

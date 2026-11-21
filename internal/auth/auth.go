@@ -106,14 +106,7 @@ func (s *Store) HasAllowedOrigin(r *http.Request) bool {
 	if i := strings.Index(host, ","); i >= 0 {
 		host = host[:i]
 	}
-	// Strip port from Host.
-	colonIdx := strings.LastIndex(host, ":")
-	hostName := host
-	if colonIdx > 0 {
-		hostName = host[:colonIdx]
-	}
-
-	return originHost == hostName
+	return originHost == extractHost(host)
 }
 
 // Cleanup removes tokens whose WS connections have closed. Intended to be

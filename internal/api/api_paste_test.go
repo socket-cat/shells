@@ -5,8 +5,11 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,14 +109,20 @@ func TestHandlePasteImageRejectsInvalid(t *testing.T) {
 	cfg := &config.Config{OutputBufferMax: 1000}
 	h := New(cfg, nil, nil, nil, nil)
 
-	// URL fetch of a non-image is rejected (uploads may be any type, URLs may not)
+	// URL fetch of a non-image is rejected (uploads may be any type, URLs may
+	// not); the test server is on loopback, so the guarded client is swapped
+	// for this check only.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("hello plain text"))
 	}))
 	defer srv.Close()
+	guarded := pasteHTTPClient
+	pasteHTTPClient = srv.Client()
+	t.Cleanup(func() { pasteHTTPClient = guarded })
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/paste-image", nil)
 	h.handlePasteImage(w, r, map[string]any{"url": srv.URL})
+	pasteHTTPClient = guarded
 	if !strings.Contains(w.Body.String(), "unsupported image format") {
 		t.Fatalf("expected unsupported image format error, got %s", w.Body.String())
 	}
@@ -125,11 +134,15 @@ func TestHandlePasteImageRejectsInvalid(t *testing.T) {
 		t.Fatalf("expected empty image error, got %s", w2.Body.String())
 	}
 
-	// SSRF attempt to cloud metadata
-	w3 := httptest.NewRecorder()
-	h.handlePasteImage(w3, r, map[string]any{"url": "http://169.254.169.254/latest/meta-data"})
-	if !strings.Contains(w3.Body.String(), "prohibited image url host") {
-		t.Fatalf("expected prohibited image url host error, got %s", w3.Body.String())
+	// SSRF: the host itself, cloud metadata, and metadata spelled as an
+	// IPv4-mapped IPv6 literal (which a substring check let through) are all
+	// refused at dial time.
+	for _, u := range []string{srv.URL, "http://169.254.169.254/latest/meta-data", "http://[::ffff:a9fe:a9fe]/latest/meta-data"} {
+		w3 := httptest.NewRecorder()
+		h.handlePasteImage(w3, r, map[string]any{"url": u})
+		if !strings.Contains(w3.Body.String(), "prohibited image url host") {
+			t.Fatalf("%s: expected prohibited image url host error, got %s", u, w3.Body.String())
+		}
 	}
 }
 
@@ -209,5 +222,66 @@ func TestSecurePasteDir(t *testing.T) {
 	_ = os.WriteFile(file, nil, 0600)
 	if securePasteDir(file) == nil {
 		t.Fatal("non-dir must be refused")
+	}
+}
+
+// TestPublicIP: what a pasted image URL may resolve to. local stands for
+// this host's interfaces: a public /24 and a public IPv6 /64.
+func TestPublicIP(t *testing.T) {
+	local := []net.Addr{
+		&net.IPNet{IP: net.ParseIP("203.0.113.5"), Mask: net.CIDRMask(24, 32)},
+		&net.IPNet{IP: net.ParseIP("2001:db8:1:2::5"), Mask: net.CIDRMask(64, 128)},
+		&net.IPNet{IP: net.ParseIP("2001:db8:7:7::5"), Mask: net.CIDRMask(128, 128)}, // DHCPv6
+	}
+	for _, c := range []struct {
+		ip string
+		ok bool
+	}{
+		{"8.8.8.8", true},
+		{"2606:4700:4700::1111", true},
+		{"2001:db8:9::1", true},    // public, not on-link
+		{"64:ff9b::808:808", true}, // NAT64 to a public IPv4
+		{"2002:808:808::1", true},  // 6to4 from a public IPv4
+		{"203.0.113.5", false},     // the host's own address
+		{"203.0.113.77", false},    // an on-link neighbour
+		{"2001:db8:1:2::1", false}, // a neighbour in the host's /64
+		{"2001:db8:7:7::1", false}, // a neighbour in a DHCPv6 /128's /64
+		{"2001:db8:7:8::1", true},  // the next /64 over
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"10.0.0.1", false},
+		{"fd00::1", false},
+		{"169.254.169.254", false},
+		{"::ffff:169.254.169.254", false},
+		{"fe80::1%eth0", false},
+		{"0.1.2.3", false},
+		{"100.64.0.1", false},
+		{"192.0.0.8", false},
+		{"198.18.0.1", false},
+		{"240.0.0.1", false},
+		{"255.255.255.255", false},
+		{"::ffff:0:a9fe:a9fe", false},             // SIIT
+		{"2001:0:4136:e378::1", false},            // Teredo
+		{"64:ff9b::a00:5", false},                 // NAT64 to 10.0.0.5
+		{"64:ff9b:1::a9fe:a9fe", false},           // local NAT64 to metadata
+		{"64:ff9b:1::808:808", false},             // local NAT64: denied whole
+		{"64:ff9b:1:a9fe:a9:fe00:808:808", false}, // /48 layout to metadata, /96 suffix public
+		{"2002:a00:1::1", false},                  // 6to4 from 10.0.0.1
+	} {
+		if got := publicIP(netip.MustParseAddr(c.ip), local); got != c.ok {
+			t.Errorf("publicIP(%s) = %v, want %v", c.ip, got, c.ok)
+		}
+	}
+	// This box's own interface addresses are refused at dial time.
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			if err := publicOnly("tcp", net.JoinHostPort(n.IP.String(), "80"), nil); !errors.Is(err, errPrivateHost) {
+				t.Errorf("own address %s: %v", n.IP, err)
+			}
+		}
 	}
 }

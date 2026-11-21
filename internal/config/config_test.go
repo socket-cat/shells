@@ -152,3 +152,20 @@ func TestCanonicalEnvsPrecedence(t *testing.T) {
 		t.Errorf("SecretSource = %q, want $SHELLS_SECRET", cfg.SecretSource)
 	}
 }
+
+func TestTLSOn(t *testing.T) {
+	for _, tc := range []struct {
+		tls, host string
+		want      bool
+	}{
+		{"", "", false}, {"", "127.0.0.1", false}, {"", "localhost", false}, {"", "[::1]", false},
+		{"", "0.0.0.0", true}, {"", "192.168.1.9", true}, {"", "::", true}, {"", "pi.lan", true},
+		{"off", "0.0.0.0", false}, {"0", "0.0.0.0", false}, {"on", "127.0.0.1", true},
+	} {
+		t.Setenv("SHELLS_TLS", tc.tls)
+		t.Setenv("SHELLS_HOST", tc.host)
+		if got := TLSOn(); got != tc.want {
+			t.Errorf("TLSOn(SHELLS_TLS=%q, SHELLS_HOST=%q) = %v, want %v", tc.tls, tc.host, got, tc.want)
+		}
+	}
+}

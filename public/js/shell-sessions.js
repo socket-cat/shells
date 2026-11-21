@@ -352,6 +352,17 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   async getWs() {
     if (this.ws && this.ws.readyState === 1 && this._wsReady) return this.ws;
     if (this._wsPromise) return this._wsPromise;
+    // Plain http off localhost is not a secure context: no WebCrypto, so no
+    // E2E handshake. Move to https when this port serves it (the default off
+    // loopback), else say so once instead of failing and reconnecting forever.
+    if (!crypto.subtle) {
+      const tls = await fetch('/api/health').then(r => r.json()).then(h => h.tls, () => false);
+      if (tls) { location.protocol = 'https:'; throw new Error('moving to https'); }
+      const msg = `HTTPS required: start the server with SHELLS_TLS=on and open https://${location.host}`;
+      this._updateLoadStatus(msg);
+      TuiDialog.toast(msg, 'error');
+      throw new Error(msg);
+    }
 
     this._wsPromise = new Promise((resolve, reject) => {
       let settled = false;
@@ -438,6 +449,8 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
                 ws.close(4002, 'Server security update required');
                 return;
               }
+              // Signed with secretHash, which is also the HKDF salt: sign only the 16-byte hex nonce.
+              if (!/^[0-9a-f]{32}$/.test(msg.authChallenge)) throw new Error('Invalid server challenge');
 
               this._updateLoadStatus('verifying server identity...');
               this._setLoadProgress(25);
@@ -757,13 +770,12 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
   async sync() {
     try {
       // The session list rides on auth-success (fetched only as a fallback);
-      // the SSH list, which only feeds badges, loads in parallel.
+      // the SSH list only feeds the backend picker, which awaits _sshLoad, so
+      // it stays off the attach path.
       const pre = this._authSessions;
       this._authSessions = null;
-      const [{ ok, data: list }] = await Promise.all([
-        pre ? { ok: true, data: pre } : this.encryptedFetch('/api/sessions', { _method: 'GET' }),
-        this.fetchSshConnections(),
-      ]);
+      this._sshLoad = this.fetchSshConnections();
+      const { ok, data: list } = pre ? { ok: true, data: pre } : await this.encryptedFetch('/api/sessions', { _method: 'GET' });
       if (!ok) return;
 
       // Update existing or add new
@@ -787,7 +799,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       await Promise.all(destroyPromises);
 
       // If everything was wiped (e.g. server restart), create a fresh one
-      if (this.sessions.size === 0) {
+      if (this.sessions.size === 0 && !destroyPromises.length) {
         const result = await this.promptCreate();
         if (!result && this.sessions.size === 0) this.showEmptyState();
         this._dismissLoadScreen();
@@ -1090,6 +1102,7 @@ window.ShellSessions = Object.assign(window.ShellSessions, {
       }
     } catch (err) {
       console.error('Restore error:', err);
+      if (!crypto.subtle) return; // no secure context: keep the HTTPS notice up
       if (this.sessions.size === 0) {
         const result = await this.promptCreate().catch(() => null);
         if (!result && this.sessions.size === 0) this.showEmptyState();

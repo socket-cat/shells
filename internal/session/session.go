@@ -394,21 +394,6 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 		}
 	})
 
-	// Auto-destroy on process exit.
-	term.OnExit(func(code int, signal string) {
-		if s.IsDestroyed() {
-			return
-		}
-		m.destroy(s)
-	})
-
-	// Reap-signal for the shutdown path: fired once cmd.Wait has returned,
-	// i.e. the child is confirmed dead. dispatchExit supports multiple
-	// subscribers, so this runs alongside the auto-destroy hook above.
-	term.OnExit(func(int, string) {
-		close(s.exited)
-	})
-
 	m.mu.Lock()
 	// Re-check: another Create may have filled the gap while we spawned.
 	if len(m.sessions) >= m.cfg.MaxSessions {
@@ -422,6 +407,23 @@ func (m *Manager) Create(cols, rows int, command, cwd string, backend *Backend) 
 	if m.onCreate != nil {
 		m.onCreate(s)
 	}
+
+	// Auto-destroy on process exit. Subscribed only once the session is
+	// registered and announced: a child that already exited fires this at
+	// once, and destroy must find it in m.sessions, after onCreate.
+	term.OnExit(func(code int, signal string) {
+		if s.IsDestroyed() {
+			return
+		}
+		m.destroy(s)
+	})
+
+	// Reap-signal for the shutdown path: fired once cmd.Wait has returned,
+	// i.e. the child is confirmed dead. dispatchExit supports multiple
+	// subscribers, so this runs alongside the auto-destroy hook above.
+	term.OnExit(func(int, string) {
+		close(s.exited)
+	})
 
 	return s, nil
 }

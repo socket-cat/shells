@@ -11,11 +11,13 @@ import (
 // RateLimiter implements a per-key sliding-window admission limiter with
 // bounded memory. Each key keeps at most `limit` timestamps — rejected
 // attempts are NOT recorded, so a flood cannot grow an entry past limit —
-// and keys idle past their whole window are swept at most once a minute.
+// and keys idle past the longest window in use are swept at most once a
+// minute (the caller's own window would cut a longer limit's history short).
 type RateLimiter struct {
 	mu        sync.Mutex
 	limits    map[string][]time.Time
 	lastSweep time.Time
+	maxWindow time.Duration
 }
 
 // NewRateLimiter creates an empty RateLimiter.
@@ -31,12 +33,14 @@ func (rl *RateLimiter) Allow(key string, limit int, window time.Duration) bool {
 	defer rl.mu.Unlock()
 	now := time.Now()
 	cutoff := now.Add(-window)
+	rl.maxWindow = max(rl.maxWindow, window)
 	if now.Sub(rl.lastSweep) > time.Minute {
 		rl.lastSweep = now
+		stale := now.Add(-rl.maxWindow)
 		for k, ts := range rl.limits {
 			keep := false
 			for _, t := range ts {
-				if t.After(cutoff) {
+				if t.After(stale) {
 					keep = true
 					break
 				}

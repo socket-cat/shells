@@ -131,7 +131,7 @@ func Load(version string) (*Config, error) {
 		ShellEnvKeys:          ShellEnvKeys,
 		CheckOrigin:           os.Getenv("SHELLS_CHECK_ORIGIN") == "true",
 		TrustProxy:            os.Getenv("SHELLS_TRUST_PROXY") == "true",
-		TLS:                   EnvTrue(os.Getenv("SHELLS_TLS")),
+		TLS:                   TLSOn(),
 		Cwd:                   firstNonEmpty(os.Getenv("SHELLS_CWD"), homeDir()),
 		Version:               version,
 		Accent:                firstNonEmpty(os.Getenv("SHELLS_ACCENT"), "#fab283"),
@@ -239,19 +239,6 @@ func validHexColor(s string) bool {
 	return true
 }
 
-// EnvInt reads an integer env var, falling back when unset or non-numeric.
-func EnvInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return fallback
-	}
-	return n
-}
-
 // FirstEnvInt reads the first set integer env var from keys, falling back to fallback.
 func FirstEnvInt(keys []string, fallback int) int {
 	for _, k := range keys {
@@ -276,6 +263,22 @@ func EnvTrue(v string) bool {
 		return true
 	}
 	return false
+}
+
+// TLSOn is the single shared resolver for self-signed HTTPS, used by the
+// server and the self-update pre-flight (they must agree on the scheme). An
+// explicit SHELLS_TLS wins; unset, TLS is on exactly when the listen host is
+// not loopback — browsers refuse WebCrypto (the E2E layer) over plain http
+// anywhere but localhost, so a LAN bind without TLS cannot work in a browser.
+// With TLS on the port still answers plain http too (selftls.Dual), so a
+// plain-http reverse proxy needs no setting.
+func TLSOn() bool {
+	if v := strings.TrimSpace(os.Getenv("SHELLS_TLS")); v != "" {
+		return EnvTrue(v)
+	}
+	h := strings.Trim(ListenHost(), "[]")
+	ip := net.ParseIP(h)
+	return h != "localhost" && (ip == nil || !ip.IsLoopback())
 }
 
 // ListenHost is the single shared resolver for the listen address: the

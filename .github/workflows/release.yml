@@ -47,6 +47,6 @@ jobs:
               --notes "Static binaries for Linux, macOS, and FreeBSD (amd64/arm64). Verify with checksums.txt."
           fi
           # The Ed25519 signature over checksums.txt is published on the
-          # independent socket.cat channel by the offline signer
+          # independent socket.cat channel by the signer, outside CI
           # (scripts/sign-release.sh) — never on GitHub, to keep the
           # cross-channel trust model intact.

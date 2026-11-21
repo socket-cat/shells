@@ -28,16 +28,22 @@ SHELLS_SECRET=your-secret ./shells
 <p align="center"><img src="docs/demo.gif" alt="Shells demo — desktop and mobile" width="920"></p>
 
 Open `http://localhost:2222` — the browser asks for the E2E secret; enter the
-same `SHELLS_SECRET` you just set. Prebuilt for Linux, macOS and FreeBSD (amd64 +
-arm64); [releases](https://github.com/socket-cat/shells/releases/latest) have
-checksums and direct links. For production, put it behind a reverse proxy
-with TLS (the PWA needs HTTPS).
+same `SHELLS_SECRET` you just set. From another machine (or Docker by IP) set
+`SHELLS_HOST=0.0.0.0` and open `<host>:2222`: it moves to HTTPS (self-signed;
+accept the warning once) — browsers only allow the encryption over HTTPS or
+localhost. For a trusted certificate (no warning, installable PWA) put it
+behind a reverse proxy with TLS. Prebuilt for Linux, macOS and FreeBSD (amd64
++ arm64); [releases](https://github.com/socket-cat/shells/releases/latest)
+have checksums and direct links.
 
 ## Why
 
 - **Persistent sessions** — shells keep running when you close the tab or lock
   your phone; reattach from any device. Built for long-running jobs and AI CLI
   agents on the go.
+- **Other machines over SSH** — type `user@host[:port]` in the new-session
+  picker and enter the password once; a per-host key is installed and its
+  shells, folders and commands sit beside the local ones.
 - **Files straight to the shell** — paste (Ctrl+V), drop or attach any file up
   to 10 MB, even over SSH; it lands on the host and its path appears on the
   prompt, ready for your AI CLI agent. On mobile, the attach button takes a
@@ -63,11 +69,19 @@ shells exec dev-box -- 'cd /srv/x && git status'   # exit code kept
 shells connect dev-box                             # interactive
 ```
 
-The remote needs no change, only HTTPS (`SHELLS_TLS=on` or a TLS proxy).
-Its key and TLS certificate are pinned on first use; only a hash of the
-secret is stored, 0600 beside the SSH keys. `exec` runs in a PTY, so stdout
-and stderr arrive merged. socket.cat relay names aren't supported yet — use
-the box's own address or its blind `union.cat` name.
+The remote needs only HTTPS: its own (on by default once `SHELLS_HOST` is
+not loopback) or a TLS proxy. Its identity key is pinned on first use, and
+so is its TLS certificate when the system roots do not vouch for it
+(self-signed); a CA-signed one is checked against the roots on every
+connection. Only a hash of the secret is stored, 0600 beside the SSH keys. `exec` keeps stdout and stderr apart and passes stdin
+byte for byte, like `ssh host cmd`; a remote older than this version runs
+it in a PTY instead (streams merged, text stdin only). In the background
+give it `</dev/null`: a stopped `exec` (Ctrl-Z, or `&` reading the
+terminal) stops answering the remote, which may end it after a minute. A
+socket.cat relay name (`https://<app>.<relay>.socket.cat`) pairs through a
+code you approve in your socket.cat account, once socket.cat supports
+pairing; until then use the box's own address or its blind `union.cat`
+name.
 
 ## Configure
 
@@ -81,7 +95,7 @@ the box's own address or its blind `union.cat` name.
 | `SHELLS_CWD` | `~` | Default working directory |
 | `SHELLS_DEFAULT_SHELL` | auto-detected | Shell binary to spawn |
 | `SHELLS_KEY_DIR` | `~/.socket.cat/config/shells` | Keys + state directory |
-| `SHELLS_TLS` | `off` | Self-signed HTTPS (`wss://`, secure cookies) |
+| `SHELLS_TLS` | `on` unless `SHELLS_HOST` is loopback | Self-signed HTTPS on the same port as plain http |
 | `SHELLS_TOKEN` | random | Admin bearer API token (`X-Shells-Token`) |
 | `SHELLS_UPDATE_CHECK` | `true` | Self-update check (opt-out) |
 
